@@ -11,7 +11,7 @@ export default function Home() {
   const start=()=>{setHelp(false);game.current?.start();};
   const active=state.phase==='running'||state.phase==='paused';
   return <main className="arcade">
-    <header className="topbar"><a href="/" className="brand" aria-label="폐쇄런 홈"><span className="brand-mark">閉</span><span>폐쇄런<small>CLOSED RUN</small></span></a><div className="edition"><span className="live-dot"/> ENDLESS NIGHT / VOL. 01</div><div className="top-actions"><button onClick={()=>{if(state.phase==='running')game.current?.pause();setHelp(true);}}>플레이 가이드 <ArrowUpRight size={15}/></button><span className="version">v.1.0</span></div></header>
+    <header className="topbar"><a href="./" className="brand" aria-label="폐쇄런 홈"><span className="brand-mark">閉</span><span>폐쇄런<small>CLOSED RUN</small></span></a><div className="edition"><span className="live-dot"/> ENDLESS NIGHT / VOL. 01</div><div className="top-actions"><button onClick={()=>{if(state.phase==='running')game.current?.pause();setHelp(true);}}>플레이 가이드 <ArrowUpRight size={15}/></button><span className="version">v.1.0</span></div></header>
     <section className={'game-frame phase-'+state.phase} aria-label="폐쇄런 3D 게임">
       <div ref={mount} className="world"/><div className="vignette"/><div className="scanlines"/>
       <div className="scene-label"><span className="live-dot"/> LIVE FROM 도망시 <span>02:17 AM</span></div>
@@ -29,5 +29,6 @@ export default function Home() {
     <footer className="below-game"><div className="key-guide"><span className="key-pair"><kbd>←</kbd><kbd>→</kbd></span><span>차선 이동</span><i/><kbd>ESC</kbd><span>잠깐 정지</span></div><p>차는 피하고. 별은 적게. 입원은 다음에.</p><span className="content-label">BGM : 정신이 건강한 의학과</span></footer>
   </main>;
 }
+
 
 

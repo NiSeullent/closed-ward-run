@@ -1,0 +1,27 @@
+# 폐쇄런 · Closed Ward Run
+
+멘헤라짱의 심야 3D 도주 액션. 멈추면 입원이다.
+
+플레이: https://niseullent.github.io/closed-ward-run/
+
+## 조작
+
+- Enter 또는 도망 시작: 게임 시작
+- ← / → 또는 A / D: 차선 이동
+- ESC / Space: 일시 정지 및 재개
+- 모바일: 좌우 버튼 또는 스와이프
+- 스피커 버튼: BGM 및 효과음 음소거
+
+자동으로 달리며 차량을 피합니다. 충돌할 때마다 수배 별과 추격 경찰이 하나씩 늘어납니다. 첫 충돌은 속도 유지, 두 번째와 세 번째는 감속하며 구급차가 가까워집니다. 네 번째 충돌은 들것에 실려 구급차로 들어가는 연출 후 게임오버입니다.
+
+BGM: 사용자가 제공한 「정신이 건강한 의학과.mp3」. 게임 시작 시 반복 재생하고 정지 및 음소거에 연동합니다.
+
+## 개발
+
+Node.js 22.13 이상에서 `npm ci` 후 `npm run dev`로 실행합니다.
+
+`npm run build:pages`는 GitHub Pages용 정적 파일을 `docs/`에 만듭니다. Pages의 배포 소스는 `main` 브랜치의 `/docs`입니다. 변경 후 빌드 결과도 함께 커밋합니다.
+
+검사: `node --test tests/rules.test.mjs`, `npx tsc --noEmit`.
+
+게임 로직과 3D 씬은 `app/runner.ts`, 충돌 규칙은 `app/rules.ts`, 캐릭터 모델은 `app/characters.ts`에 있습니다. UI는 `app/page.tsx`와 `app/globals.css`입니다.

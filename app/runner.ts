@@ -62,7 +62,7 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
  const dustGeometry=new THREE.BufferGeometry();const dustArray=new Float32Array(160*3);for(let i=0;i<160;i++){dustArray[i*3]=(Math.random()-.5)*36;dustArray[i*3+1]=Math.random()*14;dustArray[i*3+2]=-Math.random()*100;}dustGeometry.setAttribute('position',new THREE.BufferAttribute(dustArray,3));const dust=new THREE.Points(dustGeometry,new THREE.PointsMaterial({color:'#ffb1df',size:.055,transparent:true,opacity:.65}));scene.add(dust);
  let state:GameSnapshot={phase:'ready',hits:0,speed:22,distance:0,best:0,flash:'',ambulance:35};try{state.best=Number(localStorage.getItem('closed-run-best'))||0;}catch{}
  let lane=0,invuln=0,flashTime=0,captureTime=0,clock=0,lastTime=performance.now(),raf=0,publishTimer=0,muted=false,disposed=false,shake=0;
- const bgm=new Audio('/audio/closed-run-bgm.mp3');bgm.loop=true;bgm.preload='auto';bgm.volume=.42;
+ const bgm=new Audio(new URL('audio/closed-run-bgm.mp3',document.baseURI).href);bgm.loop=true;bgm.preload='auto';bgm.volume=.42;
  const playBgm=()=>{bgm.muted=muted;void bgm.play().catch(()=>{});};
  let audio:AudioContext|null=null,master:GainNode|null=null,siren:OscillatorNode|null=null,sirenGain:GainNode|null=null;
  function initAudio(){try{if(!audio){audio=new AudioContext();master=audio.createGain();master.gain.value=muted?0:.22;master.connect(audio.destination);siren=audio.createOscillator();siren.type='sine';sirenGain=audio.createGain();sirenGain.gain.value=0;siren.connect(sirenGain);sirenGain.connect(master);siren.start();}void audio.resume();}catch{}}
@@ -106,5 +106,6 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
  targetCamera.copy(camera.position);lookTarget.set(-16,1,-11);emit();raf=requestAnimationFrame(animate);
  return {start,pause,move,mute(value){muted=value;bgm.muted=value;if(master)master.gain.value=value?0:.22;},getState:()=>({...state}),dispose(){bgm.pause();bgm.removeAttribute('src');bgm.load();disposed=true;cancelAnimationFrame(raf);observer.disconnect();window.removeEventListener('keydown',keydown);window.removeEventListener('blur',blur);host.removeEventListener('pointerdown',pointerdown);host.removeEventListener('pointerup',pointerup);void audio?.close();const geometries=new Set<THREE.BufferGeometry>(),materials=new Set<THREE.Material>(),textures=new Set<THREE.Texture>();scene.traverse(o=>{if(o instanceof THREE.Mesh||o instanceof THREE.Points){geometries.add(o.geometry);const ms=Array.isArray(o.material)?o.material:[o.material];ms.forEach(m=>{materials.add(m);if('map'in m&&m.map instanceof THREE.Texture)textures.add(m.map);});}});geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());textures.forEach(t=>t.dispose());renderer.dispose();renderer.domElement.remove();}};
 }
+
 
 
