@@ -14,7 +14,7 @@ export function speedForDistance(distance:number,hits=0){return Math.max(0,22+Ma
 export function shouldActivateTaser(elapsed:number,hits:number){return elapsed>=TASER_UNLOCK_SECONDS&&hits>=1;}
 export function shouldActivateMartialLaw(elapsed:number,hits:number){return elapsed>=MARTIAL_LAW_SECONDS&&hits>=3;}
 export function jumpClearsTaser(height:number){return height>=JUMP_CLEAR_HEIGHT;}
-export const ZONE_LENGTH_METERS=600;
+export const ZONE_LENGTH_METERS=780;
 export type ZoneSpec={name:string;banner:string;fog:string;sky:string;lampA:string;lampB:string;speedBonus:number;gapMin:number;gapMax:number;carBoost:number};
 export const ZONES:ZoneSpec[]=[
  {name:'불야성 도심',banner:'불야성 도심 진입 — 네온이 너를 판다',fog:'#291934',sky:'#20152f',lampA:'#ff4aa6',lampB:'#46ccff',speedBonus:0,gapMin:17,gapMax:32,carBoost:0},
@@ -24,3 +24,8 @@ export const ZONES:ZoneSpec[]=[
 ];
 /** Zones rotate every ZONE_LENGTH_METERS; loop counts full rotations for difficulty scaling. */
 export function zoneForDistance(distance:number){const step=Math.floor(Math.max(0,distance)/ZONE_LENGTH_METERS);const index=step%ZONES.length;return {index,loop:Math.floor(step/ZONES.length),spec:ZONES[index]};}
+export const CURVE_DURATION_SECONDS=5;
+export const CURVE_MIN_INTERVAL_SECONDS=35;
+export const CURVE_MAX_INTERVAL_SECONDS=60;
+/** 0 at curve start/end, 1 mid-curve — drives camera swing, fog and difficulty. */
+export function curveIntensity(t:number){const p=Math.max(0,Math.min(1,t/CURVE_DURATION_SECONDS));return Math.sin(p*Math.PI);}
