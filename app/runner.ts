@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { createMenhera,createCop,animateRunner } from './characters';
-import { AMBULANCE_GAPS,HIT_GRACE,nextHit,collides,clampLane,speedForDistance,shouldActivateTaser,shouldActivateMartialLaw,jumpClearsTaser,TASER_INTERVAL_SECONDS,type Phase } from './rules';
+import { AMBULANCE_GAPS,HIT_GRACE,nextHit,collides,clampLane,speedForDistance,shouldActivateTaser,shouldActivateMartialLaw,jumpClearsTaser,TASER_INTERVAL_SECONDS,zoneForDistance,type Phase } from './rules';
 export type MapItem={kind:'car'|'taser'|'helicopter'|'police';lane:number;z:number};
 export type CaptureReason='ambulance'|'helicopter';
-export type GameSnapshot={phase:Phase;hits:number;speed:number;distance:number;best:number;elapsed:number;flash:string;ambulance:number;lane:number;jumping:boolean;jumpHeight:number;martialLaw:boolean;helicopter:boolean;taser:boolean;captureReason?:CaptureReason;mapItems:MapItem[]};
+export type GameSnapshot={phase:Phase;hits:number;speed:number;distance:number;best:number;elapsed:number;flash:string;ambulance:number;lane:number;jumping:boolean;jumpHeight:number;martialLaw:boolean;helicopter:boolean;taser:boolean;zone:string;captureReason?:CaptureReason;mapItems:MapItem[]};
 export type GameAPI={start:()=>void;pause:()=>void;move:(dir:number)=>void;jump:()=>void;mute:(value:boolean)=>void;dispose:()=>void;getState:()=>GameSnapshot};
 const mix=THREE.MathUtils.lerp,clamp=THREE.MathUtils.clamp;
 export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):GameAPI{
@@ -28,10 +28,10 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
  for(let i=0;i<40;i++)for(const x of [-2,2])box(road,.09,.025,2.4,x,.002,-i*6,'#bda4c5');
  box(scene,.07,.02,250,-5.7,.005,-65,'#e3b765',true);box(scene,.07,.02,250,5.7,.005,-65,'#e3b765',true);
  const city=new THREE.Group();scene.add(city);
- const signs=['불야성','24시 편의점','도망시','오늘도 영업','돌아와♥','퇴원약국','NIGHT RUN','입원 문의'];
- for(let i=0;i<34;i++){
-  const side=i%2===0?-1:1,z=-Math.floor(i/2)*12+18,w=4+(i*7%4),h=7+(i*13%14),x=side*(9+w/2+(i%3));const g=new THREE.Group();g.position.z=z;city.add(g);
-  box(g,w,h,8,x,h/2,0,['#34304e','#24283c','#44334d','#2d3049'][i%4]);box(g,w+.3,.22,8.3,x,h,0,'#544566');
+  const signs=['불야성','24시 편의점','도망시','오늘도 영업','돌아와♥','퇴원약국','NIGHT RUN','입원 문의','심야식당','탈출 금지','구급차 우선','수면제 특가','달빛 세탁소','응급실 24시','跑!','도망자 수배중'];
+  for(let i=0;i<52;i++){
+   const side=i%2===0?-1:1,z=-Math.floor(i/2)*12+18,w=4+(i*7%5),h=7+(i*13%16),x=side*(9+w/2+(i%3));const g=new THREE.Group();g.position.z=z;city.add(g);
+   box(g,w,h,8,x,h/2,0,['#34304e','#24283c','#44334d','#2d3049','#3a2b3f','#232b4a'][i%6]);box(g,w+.3,.22,8.3,x,h,0,'#544566');
   for(let row=0;row<Math.floor(h/2.2);row++)for(let col=0;col<3;col++)if((row+col+i)%4!==0)box(g,.55,1,.035,x-w/2+.8+col*1.2,2+row*2.1,4.03,(i+row)%3===0?'#ef77a2':'#a79cdc',true);
   box(g,w-.6,2,.08,x,1.2,4.1,'#111626');box(g,w-.3,.15,.15,x,2.35,4.2,i%3===0?'#70d9ed':'#fa69b0',true);
   if(i%2===0||i<4)label(g,signs[i%signs.length],x,3.7,4.15,w*.96,1.25,i%3===0?'#86edee':'#ff8aba');
@@ -40,7 +40,19 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
  const skyline=new THREE.Group();scene.add(skyline);
  for(let i=0;i<28;i++){const h=10+(i*11%29);box(skyline,5,h,8,(i-14)*7,h/2,-145-(i%4)*6,'#35213f');}
  const moon=new THREE.Mesh(new THREE.CircleGeometry(10,64),new THREE.MeshBasicMaterial({color:'#df8cac',fog:false}));moon.position.set(26,32,-170);scene.add(moon);
- const gantry=new THREE.Group();gantry.position.z=-76;scene.add(gantry);for(const x of [-6.3,6.3])box(gantry,.2,10,.2,x,5,0,'#817086');box(gantry,13,.2,.2,0,10,0,'#817086');label(gantry,'↑ 도망시     출구 없음',0,8.4,.15,8,1.8,'#b8e6d9','#193c40');
+  const gantry=new THREE.Group();gantry.position.z=-76;scene.add(gantry);for(const x of [-6.3,6.3])box(gantry,.2,10,.2,x,5,0,'#817086');box(gantry,13,.2,.2,0,10,0,'#817086');
+  const zoneCanvas=document.createElement('canvas');zoneCanvas.width=512;zoneCanvas.height=128;const zoneCtx=zoneCanvas.getContext('2d')!;
+  const zoneTex=new THREE.CanvasTexture(zoneCanvas);zoneTex.colorSpace=THREE.SRGBColorSpace;
+  function drawZoneSign(text:string){zoneCtx.fillStyle='#193c40';zoneCtx.fillRect(0,0,512,128);zoneCtx.strokeStyle='#b8e6d9';zoneCtx.lineWidth=7;zoneCtx.strokeRect(6,6,500,116);zoneCtx.fillStyle='#b8e6d9';zoneCtx.textAlign='center';zoneCtx.textBaseline='middle';zoneCtx.font='bold 44px "Malgun Gothic",sans-serif';zoneCtx.fillText(text,256,67,470);zoneTex.needsUpdate=true;}
+  drawZoneSign('↑ 도망시     출구 없음');
+  const zoneSign=new THREE.Mesh(new THREE.PlaneGeometry(8,1.8),new THREE.MeshBasicMaterial({map:zoneTex,side:THREE.DoubleSide,toneMapped:false}));zoneSign.position.set(0,8.4,.15);gantry.add(zoneSign);
+  const lamps=new THREE.Group();scene.add(lamps);const LAMP_COUNT=14;
+  for(let i=0;i<LAMP_COUNT;i++){const side=i%2===0?-1:1;const g=new THREE.Group();g.position.set(side*7.4,0,20-i*22);box(g,.14,6.4,.14,0,3.2,0,'#6f6584');box(g,1.6,.12,.12,-side*.8,6.4,0,'#6f6584');box(g,.9,.14,.5,-side*1.5,6.3,0,'#ffe9b0',true);lamps.add(g);}
+  const LAMP_SPAN=LAMP_COUNT*22;
+  const starGeo=new THREE.BufferGeometry();const starArr=new Float32Array(120*3);
+  for(let i=0;i<120;i++){starArr[i*3]=(Math.random()-.5)*220;starArr[i*3+1]=22+Math.random()*55;starArr[i*3+2]=-60-Math.random()*120;}
+  starGeo.setAttribute('position',new THREE.BufferAttribute(starArr,3));
+  scene.add(new THREE.Points(starGeo,new THREE.PointsMaterial({color:'#cfe6ff',size:.4,transparent:true,opacity:.8,fog:false})));
   function vehicle(color:string,ambulance=false){const g=new THREE.Group();const wheels:THREE.Mesh[]=[];
    box(g,2.1,.6,ambulance?4.8:4.1,0,.65,0,color);box(g,ambulance?2.05:1.8,ambulance?1.75:.85,ambulance?3.7:2.1,0,ambulance?1.75:1.36,ambulance?.45:.15,color);
    box(g,1.75,.65,.045,0,ambulance?1.65:1.4,ambulance?-1.46:-.92,'#233a56');
@@ -72,8 +84,9 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
  const cars:{mesh:THREE.Group;hit:boolean;previousZ:number}[]=[];const colors=['#f588b6','#7e8fdb','#c6c5d3','#46a9bb','#d9a374','#8b6caa'];
  for(let i=0;i<12;i++){const v=vehicle(colors[i%colors.length]);v.position.set(((i*7)%3-1)*3.65,0,-22-i*17);scene.add(v);cars.push({mesh:v,hit:false,previousZ:v.position.z});}
  const dustGeometry=new THREE.BufferGeometry();const dustArray=new Float32Array(160*3);for(let i=0;i<160;i++){dustArray[i*3]=(Math.random()-.5)*36;dustArray[i*3+1]=Math.random()*14;dustArray[i*3+2]=-Math.random()*100;}dustGeometry.setAttribute('position',new THREE.BufferAttribute(dustArray,3));const dust=new THREE.Points(dustGeometry,new THREE.PointsMaterial({color:'#ffb1df',size:.055,transparent:true,opacity:.65}));scene.add(dust);
- let state:GameSnapshot={phase:'ready',hits:0,speed:22,distance:0,best:0,elapsed:0,flash:'',ambulance:35,lane:0,jumping:false,jumpHeight:0,martialLaw:false,helicopter:false,taser:false,mapItems:[]};try{state.best=Number(localStorage.getItem('closed-run-best'))||0;}catch{}
- let lane=0,invuln=0,flashTime=0,captureTime=0,clock=0,lastTime=performance.now(),raf=0,publishTimer=0,muted=false,disposed=false,shake=0,jumpHeight=0,jumpVelocity=0,taserTimer=0,taserActive=false,taserLane=0,taserPreviousZ=0,helicopterActive=false,helicopterPreviousZ=-70;
+  let state:GameSnapshot={phase:'ready',hits:0,speed:22,distance:0,best:0,elapsed:0,flash:'',ambulance:35,lane:0,jumping:false,jumpHeight:0,martialLaw:false,helicopter:false,taser:false,zone:zoneForDistance(0).spec.name,mapItems:[]};try{state.best=Number(localStorage.getItem('closed-run-best'))||0;}catch{}
+  let lane=0,invuln=0,flashTime=0,captureTime=0,clock=0,lastTime=performance.now(),raf=0,publishTimer=0,muted=false,disposed=false,shake=0,jumpHeight=0,jumpVelocity=0,taserTimer=0,taserActive=false,taserLane=0,taserPreviousZ=0,helicopterActive=false,helicopterPreviousZ=-70,zoneIndex=-1;
+  const zoneFog=new THREE.Color(zoneForDistance(0).spec.fog),zoneSky=new THREE.Color(zoneForDistance(0).spec.sky),zoneLampA=new THREE.Color(zoneForDistance(0).spec.lampA),zoneLampB=new THREE.Color(zoneForDistance(0).spec.lampB);
   // Rotating soundtrack: every mp3 in public/audio plays in order, then loops.
   const TRACK_URLS=['audio/song1.mp3','audio/closed-run-bgm.mp3'].map(p=>new URL(p,document.baseURI).href);
   let trackIndex=0;
@@ -88,7 +101,7 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
   function playTitleBgm(){playTrack(0,.35);}
  playTitleBgm();
  const emit=()=>{const mapItems:MapItem[]=[];for(const c of cars){if(c.mesh.position.z<18&&c.mesh.position.z>-72)mapItems.push({kind:'car',lane:Math.round(c.mesh.position.x/3.65),z:c.mesh.position.z});}if(taserActive)mapItems.push({kind:'taser',lane:taserLane,z:taser.position.z});if(helicopterActive)mapItems.push({kind:'helicopter',lane:Math.round(helicopter.position.x/3.65),z:helicopter.position.z});if(taserPolice.visible)mapItems.push({kind:'police',lane:taserLane,z:taserPolice.position.z});onState({...state,lane,jumping:jumpHeight>.02,jumpHeight,martialLaw:shouldActivateMartialLaw(state.elapsed,state.hits),helicopter:helicopterActive,taser:taserActive,mapItems});};
- function start(){initAudio();bgm.volume=.42;playBgm();state={...state,phase:'running',hits:0,speed:22,distance:0,elapsed:0,flash:'',ambulance:35,lane:0,jumping:false,jumpHeight:0,martialLaw:false,helicopter:false,taser:false,captureReason:undefined,mapItems:[]};lane=0;invuln=1;captureTime=0;flashTime=0;shake=0;jumpHeight=0;jumpVelocity=0;taserTimer=0;taserActive=false;helicopterActive=false;player.visible=true;player.position.set(0,0,0);player.rotation.set(0,0,0);player.scale.setScalar(1);ambulance.visible=true;ambulance.position.set(3,0,35);ambulance.rotation.set(0,0,0);for(const d of ambulance.userData.doors)d.rotation.y=0;helicopter.visible=false;taser.visible=false;taserPolice.visible=false;taserPolice.rotation.set(0,Math.PI,0);stretcher.visible=false;cops.forEach(c=>{c.visible=false;c.rotation.set(0,0,0);});cars.forEach((c,i)=>{c.mesh.position.set(((i*7)%3-1)*3.65,0,-24-i*18);c.hit=false;c.previousZ=c.mesh.position.z;});camera.position.set(0,7,13);beep(720);emit();}
+ function start(){initAudio();bgm.volume=.42;playBgm();state={...state,phase:'running',hits:0,speed:22,distance:0,elapsed:0,flash:'',ambulance:35,lane:0,jumping:false,jumpHeight:0,martialLaw:false,helicopter:false,taser:false,zone:zoneForDistance(0).spec.name,captureReason:undefined,mapItems:[]};lane=0;invuln=1;captureTime=0;flashTime=0;shake=0;jumpHeight=0;jumpVelocity=0;taserTimer=0;taserActive=false;helicopterActive=false;zoneIndex=-1;drawZoneSign('↑ 도망시     출구 없음');zoneFog.set(zoneForDistance(0).spec.fog);zoneSky.set(zoneForDistance(0).spec.sky);zoneLampA.set(zoneForDistance(0).spec.lampA);zoneLampB.set(zoneForDistance(0).spec.lampB);player.visible=true;player.position.set(0,0,0);player.rotation.set(0,0,0);player.scale.setScalar(1);ambulance.visible=true;ambulance.position.set(3,0,35);ambulance.rotation.set(0,0,0);for(const d of ambulance.userData.doors)d.rotation.y=0;helicopter.visible=false;taser.visible=false;taserPolice.visible=false;taserPolice.rotation.set(0,Math.PI,0);stretcher.visible=false;cops.forEach(c=>{c.visible=false;c.rotation.set(0,0,0);});cars.forEach((c,i)=>{c.mesh.position.set(((i*7)%3-1)*3.65,0,-24-i*18);c.hit=false;c.previousZ=c.mesh.position.z;});camera.position.set(0,7,13);beep(720);emit();}
  function pause(){if(state.phase==='running'){state.phase='paused';bgm.pause();}else if(state.phase==='paused'){state.phase='running';initAudio();playBgm();}emit();}
  function move(dir:number){if(state.phase!=='running')return;lane=clampLane(lane+dir);state.lane=lane;beep(300,.045);}
  function jump(){if(state.phase!=='running'||jumpHeight>0)return;jumpVelocity=8.2;beep(540,.08);}
@@ -96,17 +109,21 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
  function helicopterHit(){if(state.phase!=='running')return;state.phase='capture';state.captureReason='helicopter';state.helicopter=false;helicopterActive=false;helicopter.visible=false;state.flash='공군 출동! 헬기로 입원합니다.';flashTime=4;captureTime=0;shake=.8;bgm.volume=.2;state.best=Math.max(state.best,state.distance);beep(75,.8);try{localStorage.setItem('closed-run-best',String(Math.floor(state.best)));}catch{}emit();}
  const targetCamera=new THREE.Vector3(),lookTarget=new THREE.Vector3();
  function animate(now:number){if(disposed)return;raf=requestAnimationFrame(animate);const dt=Math.min((now-lastTime)/1000,.04);lastTime=now;const running=state.phase==='running',capturing=state.phase==='capture';if(state.phase!=='paused')clock+=dt;
-  if(running){state.elapsed+=dt;state.distance+=state.speed*dt;state.best=Math.max(state.best,state.distance);state.speed=mix(state.speed,speedForDistance(state.distance,state.hits),1-Math.exp(-dt*4));invuln=Math.max(0,invuln-dt);flashTime-=dt;if(flashTime<=0)state.flash='';
+   if(running){state.elapsed+=dt;state.distance+=state.speed*dt;state.best=Math.max(state.best,state.distance);
+    const zf=zoneForDistance(state.distance);
+    if(zf.index!==zoneIndex){zoneIndex=zf.index;state.zone=zf.spec.name;state.flash=zf.spec.banner;flashTime=2.4;drawZoneSign('↑ '+zf.spec.name+'     출구 없음');zoneFog.set(zf.spec.fog);zoneSky.set(zf.spec.sky);zoneLampA.set(zf.spec.lampA);zoneLampB.set(zf.spec.lampB);beep(520,.15);}
+    const blend=1-Math.exp(-dt*1.2);scene.fog!.color.lerp(zoneFog,blend);(scene.background as THREE.Color).lerp(zoneSky,blend);pinkLight.color.lerp(zoneLampA,blend);cyanLight.color.lerp(zoneLampB,blend);
+    state.speed=mix(state.speed,speedForDistance(state.distance,state.hits)+zf.spec.speedBonus,1-Math.exp(-dt*4));invuln=Math.max(0,invuln-dt);flashTime-=dt;if(flashTime<=0)state.flash='';
    if(jumpHeight>0||jumpVelocity>0){jumpVelocity-=22*dt;jumpHeight=Math.max(0,jumpHeight+jumpVelocity*dt);if(jumpHeight===0)jumpVelocity=0;}
    player.position.x=mix(player.position.x,lane*3.65,1-Math.exp(-dt*15));player.position.y=jumpHeight;player.rotation.z=clamp((lane*3.65-player.position.x)*-.12,-.22,.22);player.visible=invuln<=0||Math.floor(clock*14)%2===0;animateRunner(player,clock*state.speed/22,jumpHeight>.03?.35:1);
     for(const c of cars){c.previousZ=c.mesh.position.z;
      // Same-direction traffic: every car faces -Z like the player and the
      // relative speed stays BELOW the road scroll, so cars read as slower
      // cars ahead being overtaken instead of oncoming/reversing traffic.
-     c.mesh.position.z+=Math.max(6,state.speed-11)*dt;
+     c.mesh.position.z+=Math.max(6,state.speed-11+zf.spec.carBoost)*dt;
      const wheels=c.mesh.userData.wheels as THREE.Mesh[]|undefined;if(wheels)for(const w of wheels)w.rotation.x+=dt*9;
      if(!c.hit&&collides(player.position.x,c.mesh.position.x,c.previousZ,c.mesh.position.z)){c.hit=true;hit();if(state.phase==='capture')break;}
-     if(c.mesh.position.z>22){const minZ=Math.min(...cars.map(v=>v.mesh.position.z));c.mesh.position.z=minZ-(17+Math.random()*15);c.mesh.position.x=(Math.floor(Math.random()*3)-1)*3.65;c.hit=false;c.previousZ=c.mesh.position.z;}}
+     if(c.mesh.position.z>22){const minZ=Math.min(...cars.map(v=>v.mesh.position.z));const zgMin=Math.max(10,zf.spec.gapMin-zf.loop*1.5);c.mesh.position.z=minZ-(zgMin+Math.random()*(zf.spec.gapMax-zgMin));c.mesh.position.x=(Math.floor(Math.random()*3)-1)*3.65;c.hit=false;c.previousZ=c.mesh.position.z;}}
     if(shouldActivateTaser(state.elapsed,state.hits)&&!taserActive&&state.elapsed-taserTimer>=TASER_INTERVAL_SECONDS){taserActive=true;taserTimer=state.elapsed;taserLane=Math.floor(Math.random()*3)-1;taser.position.set(taserLane*3.65,1.05,-30);taserPreviousZ=taser.position.z;taserPolice.position.set(taserLane*3.65,0,-30);taserPolice.rotation.set(0,Math.PI,0);taser.visible=true;taserPolice.visible=true;beep(880,.12);}
     if(taserActive){taserPreviousZ=taser.position.z;taser.position.z+=(state.speed+28)*dt;
      // The shooter is a static roadblock: scroll with the world and stand
@@ -130,7 +147,7 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
    if(captureTime>4.1){state.phase='over';state.speed=0;bgm.pause();beep(85,.8);emit();}
   }
   if(state.phase!=='paused'&&state.phase!=='over'){
-   const drift=state.phase==='ready'?3:state.speed;road.position.z=(road.position.z+drift*dt)%6;city.children.forEach(g=>{g.position.z+=drift*dt;if(g.position.z>35)g.position.z-=204;});gantry.position.z+=drift*dt;if(gantry.position.z>25)gantry.position.z=-180;
+   const drift=state.phase==='ready'?3:state.speed;road.position.z=(road.position.z+drift*dt)%6;city.children.forEach(g=>{g.position.z+=drift*dt;if(g.position.z>35)g.position.z-=312;});lamps.children.forEach(g=>{g.position.z+=drift*dt;if(g.position.z>35)g.position.z-=LAMP_SPAN;});gantry.position.z+=drift*dt;if(gantry.position.z>25)gantry.position.z=-180;
    for(let i=0;i<160;i++){dustArray[i*3+2]+=drift*dt*.5;if(dustArray[i*3+2]>20)dustArray[i*3+2]=-100;}dustGeometry.attributes.position.needsUpdate=true;
   }
   if(state.phase!=='paused'){camera.position.lerp(targetCamera,1-Math.exp(-dt*4));camera.lookAt(lookTarget);shake=Math.max(0,shake-dt);if(shake>0){camera.position.x+=(Math.random()-.5)*shake*.5;camera.position.y+=(Math.random()-.5)*shake*.25;}}
