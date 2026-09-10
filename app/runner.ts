@@ -22,7 +22,9 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
   const canvas=document.createElement('canvas');canvas.width=512;canvas.height=128;const ctx=canvas.getContext('2d')!;ctx.fillStyle=bg;ctx.fillRect(0,0,512,128);ctx.strokeStyle=color;ctx.lineWidth=7;ctx.strokeRect(6,6,500,116);ctx.fillStyle=color;ctx.textAlign='center';ctx.textBaseline='middle';ctx.font='bold 58px "Malgun Gothic",sans-serif';ctx.fillText(text,256,67,470);
   const tex=new THREE.CanvasTexture(canvas);tex.colorSpace=THREE.SRGBColorSpace;const m=new THREE.Mesh(new THREE.PlaneGeometry(w,h),new THREE.MeshBasicMaterial({map:tex,side:THREE.DoubleSide,toneMapped:false}));m.position.set(x,y,z);parent.add(m);return m;
  }
- box(scene,180,.2,260,0,-.34,-65,'#14121f');box(scene,12,.18,250,0,-.12,-65,'#28273c');
+  const groundMat=new THREE.MeshStandardMaterial({color:zoneForDistance(0).spec.ground,roughness:.9,metalness:0});
+  const groundBase=new THREE.Mesh(new THREE.BoxGeometry(240,.2,320),groundMat);groundBase.position.set(0,-.34,-80);groundBase.receiveShadow=true;scene.add(groundBase);
+  box(scene,12,.18,300,0,-.12,-80,'#28273c');
  for(const x of [-6.5,6.5]){box(scene,1,.4,250,x,.02,-65,'#565066');box(scene,.06,.05,250,x-Math.sign(x)*.55,.25,-65,'#ee629c',true);}
  const road=new THREE.Group();scene.add(road);
  for(let i=0;i<40;i++)for(const x of [-2,2])box(road,.09,.025,2.4,x,.002,-i*6,'#bda4c5');
@@ -63,12 +65,17 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
     if(v.extra==='highway')g.visible=i%3===0;
     part(g,new THREE.BoxGeometry(.12,6,.12),poleMat,side*6.8,3,0);part(g,new THREE.BoxGeometry(1.9,.1,.12),poleMat,side*6.2,6,0);part(g,new THREE.BoxGeometry(1.1,.07,.35),poleGlow,side*5.8,5.95,0);
    }
+   const matSet=new Set<THREE.Material>();grp.traverse(o=>{if(o instanceof THREE.Mesh){const ms=Array.isArray(o.material)?o.material:[o.material];ms.forEach(m=>{m.transparent=true;matSet.add(m);});}});grp.userData.mats=[...matSet];
    return grp;
   }
   const cityGroups=CITY_LOOKS.map(buildCityVariant);
   cityGroups.forEach((g,idx)=>{g.visible=idx===0;scene.add(g);});
-  let cityGroup=cityGroups[0];
-  function setCityVariant(idx:number){const next=cityGroups[idx];if(next===cityGroup)return;for(let i=0;i<cityGroup.children.length;i++)next.children[i].position.z=cityGroup.children[i].position.z;cityGroup.visible=false;next.visible=true;cityGroup=next;}
+  let cityGroup=cityGroups[0],fadeFrom:THREE.Group|null=null,cityFadeT=-1;
+  const CITY_FADE_SECONDS=2.5;
+  function setGroupOpacity(g:THREE.Group,o:number){for(const m of (g.userData.mats as THREE.Material[]))m.opacity=o;}
+  // Instant swap (game start). In-game zone changes use startCityFade for a gradual crossfade.
+  function setCityVariant(idx:number){const next=cityGroups[idx];for(let i=0;i<cityGroup.children.length&&i<next.children.length;i++)next.children[i].position.z=cityGroup.children[i].position.z;if(fadeFrom&&fadeFrom!==next){setGroupOpacity(fadeFrom,1);fadeFrom.visible=false;}setGroupOpacity(next,1);cityGroup.visible=false;next.visible=true;cityGroup=next;fadeFrom=null;cityFadeT=-1;}
+  function startCityFade(idx:number){const next=cityGroups[idx];if(next===cityGroup)return;if(fadeFrom){setGroupOpacity(fadeFrom,1);fadeFrom.visible=false;}fadeFrom=cityGroup;cityGroup=next;for(let i=0;i<fadeFrom.children.length;i++)next.children[i].position.z=fadeFrom.children[i].position.z;setGroupOpacity(next,0);next.visible=true;cityFadeT=0;}
  const skyline=new THREE.Group();scene.add(skyline);
  for(let i=0;i<28;i++){const h=10+(i*11%29);box(skyline,5,h,8,(i-14)*7,h/2,-145-(i%4)*6,'#35213f');}
  const moon=new THREE.Mesh(new THREE.CircleGeometry(10,64),new THREE.MeshBasicMaterial({color:'#df8cac',fog:false}));moon.position.set(26,32,-170);scene.add(moon);
@@ -142,7 +149,7 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
   let state:GameSnapshot={phase:'ready',hits:0,speed:22,distance:0,best:0,elapsed:0,flash:'',ambulance:35,lane:0,jumping:false,jumpHeight:0,martialLaw:false,helicopter:false,taser:false,zone:zoneForDistance(0).spec.name,curve:false,mapItems:[]};try{state.best=Number(localStorage.getItem('closed-run-best'))||0;}catch{}
   let lane=0,invuln=0,flashTime=0,captureTime=0,clock=0,lastTime=performance.now(),raf=0,publishTimer=0,muted=false,disposed=false,shake=0,jumpHeight=0,jumpVelocity=0,taserTimer=0,taserActive=false,taserLane=0,taserPreviousZ=0,helicopterActive=false,helicopterPreviousZ=-70,zoneIndex=-1,curveDir=0,curveT=0,nextCurveAt=30;
   let nextDrunkAt=0,nextSpeedAt=40,nextWrongAt=90,drunkActive=false,drunkT=0,drunkBaseX=0,drunkPrevZ=0,speedStage=0,speedT=0,speedLane=0,speedPrevZ=0,wrongActive=false,wrongT=0,wrongVictim=-1,wrongPrevZ=0;
-  const zoneFog=new THREE.Color(zoneForDistance(0).spec.fog),zoneSky=new THREE.Color(zoneForDistance(0).spec.sky),zoneLampA=new THREE.Color(zoneForDistance(0).spec.lampA),zoneLampB=new THREE.Color(zoneForDistance(0).spec.lampB);
+  const zoneFog=new THREE.Color(zoneForDistance(0).spec.fog),zoneSky=new THREE.Color(zoneForDistance(0).spec.sky),zoneGround=new THREE.Color(zoneForDistance(0).spec.ground),zoneLampA=new THREE.Color(zoneForDistance(0).spec.lampA),zoneLampB=new THREE.Color(zoneForDistance(0).spec.lampB);
   // Rotating soundtrack: every mp3 in public/audio plays in order, then loops.
   const TRACK_URLS=['audio/song1.mp3','audio/closed-run-bgm.mp3'].map(p=>new URL(p,document.baseURI).href);
   let trackIndex=0;
@@ -157,7 +164,7 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
   function playTitleBgm(){playTrack(0,.35);}
  playTitleBgm();
  const emit=()=>{const mapItems:MapItem[]=[];for(const c of cars){if(c.mesh.position.z<18&&c.mesh.position.z>-72)mapItems.push({kind:'car',lane:Math.round(c.mesh.position.x/3.65),z:c.mesh.position.z});}if(taserActive)mapItems.push({kind:'taser',lane:taserLane,z:taser.position.z});if(helicopterActive)mapItems.push({kind:'helicopter',lane:Math.round(helicopter.position.x/3.65),z:helicopter.position.z});if(taserPolice.visible)mapItems.push({kind:'police',lane:taserLane,z:taserPolice.position.z});for(const m of [drunkMesh,speederMesh,wrongwayMesh])if(m.visible)mapItems.push({kind:'car',lane:Math.round(m.position.x/3.65),z:m.position.z});for(const w of wrecks)if(w.active)mapItems.push({kind:'car',lane:Math.round(w.mesh.position.x/3.65),z:w.mesh.position.z});onState({...state,lane,jumping:jumpHeight>.02,jumpHeight,martialLaw:shouldActivateMartialLaw(state.elapsed,state.hits),helicopter:helicopterActive,taser:taserActive,mapItems});};
- function start(){initAudio();bgm.volume=.42;playBgm();state={...state,phase:'running',hits:0,speed:22,distance:0,elapsed:0,flash:'',ambulance:35,lane:0,jumping:false,jumpHeight:0,martialLaw:false,helicopter:false,taser:false,zone:zoneForDistance(0).spec.name,curve:false,captureReason:undefined,mapItems:[]};lane=0;invuln=1;captureTime=0;flashTime=0;shake=0;jumpHeight=0;jumpVelocity=0;taserTimer=0;taserActive=false;helicopterActive=false;zoneIndex=-1;setCityVariant(0);curveDir=0;curveT=0;nextCurveAt=30+Math.random()*15;chevrons.visible=false;(scene.fog as THREE.FogExp2).density=.015;drunkActive=false;drunkMesh.visible=false;speedStage=0;speederMesh.visible=false;nextSpeedAt=40;wrongActive=false;wrongwayMesh.visible=false;nextWrongAt=90;nextDrunkAt=0;gate.visible=false;gateZone='';for(const w of wrecks){w.active=false;w.mesh.visible=false;}drawZoneSign('↑ 도망시     출구 없음');zoneFog.set(zoneForDistance(0).spec.fog);zoneSky.set(zoneForDistance(0).spec.sky);zoneLampA.set(zoneForDistance(0).spec.lampA);zoneLampB.set(zoneForDistance(0).spec.lampB);player.visible=true;player.position.set(0,0,0);player.rotation.set(0,0,0);player.scale.setScalar(1);ambulance.visible=true;ambulance.position.set(3,0,35);ambulance.rotation.set(0,0,0);for(const d of ambulance.userData.doors)d.rotation.y=0;helicopter.visible=false;taser.visible=false;taserPolice.visible=false;taserPolice.rotation.set(0,Math.PI,0);stretcher.visible=false;cops.forEach(c=>{c.visible=false;c.rotation.set(0,0,0);});cars.forEach((c,i)=>{c.mesh.position.set(((i*7)%3-1)*3.65,0,-24-i*18);c.hit=false;c.previousZ=c.mesh.position.z;});camera.position.set(0,7,13);beep(720);emit();}
+ function start(){initAudio();bgm.volume=.42;playBgm();state={...state,phase:'running',hits:0,speed:22,distance:0,elapsed:0,flash:'',ambulance:35,lane:0,jumping:false,jumpHeight:0,martialLaw:false,helicopter:false,taser:false,zone:zoneForDistance(0).spec.name,curve:false,captureReason:undefined,mapItems:[]};lane=0;invuln=1;captureTime=0;flashTime=0;shake=0;jumpHeight=0;jumpVelocity=0;taserTimer=0;taserActive=false;helicopterActive=false;zoneIndex=-1;setCityVariant(0);curveDir=0;curveT=0;nextCurveAt=30+Math.random()*15;chevrons.visible=false;(scene.fog as THREE.FogExp2).density=.015;drunkActive=false;drunkMesh.visible=false;speedStage=0;speederMesh.visible=false;nextSpeedAt=40;wrongActive=false;wrongwayMesh.visible=false;nextWrongAt=90;nextDrunkAt=0;gate.visible=false;gateZone='';for(const w of wrecks){w.active=false;w.mesh.visible=false;}drawZoneSign('↑ 도망시     출구 없음');zoneFog.set(zoneForDistance(0).spec.fog);zoneSky.set(zoneForDistance(0).spec.sky);zoneGround.set(zoneForDistance(0).spec.ground);groundMat.color.set(zoneForDistance(0).spec.ground);zoneLampA.set(zoneForDistance(0).spec.lampA);zoneLampB.set(zoneForDistance(0).spec.lampB);player.visible=true;player.position.set(0,0,0);player.rotation.set(0,0,0);player.scale.setScalar(1);ambulance.visible=true;ambulance.position.set(3,0,35);ambulance.rotation.set(0,0,0);for(const d of ambulance.userData.doors)d.rotation.y=0;helicopter.visible=false;taser.visible=false;taserPolice.visible=false;taserPolice.rotation.set(0,Math.PI,0);stretcher.visible=false;cops.forEach(c=>{c.visible=false;c.rotation.set(0,0,0);});cars.forEach((c,i)=>{c.mesh.position.set(((i*7)%3-1)*3.65,0,-24-i*18);c.hit=false;c.previousZ=c.mesh.position.z;});camera.position.set(0,7,13);beep(720);emit();}
  function pause(){if(state.phase==='running'){state.phase='paused';bgm.pause();}else if(state.phase==='paused'){state.phase='running';initAudio();playBgm();}emit();}
  function move(dir:number){if(state.phase!=='running')return;lane=clampLane(lane+dir);state.lane=lane;beep(300,.045);}
  function jump(){if(state.phase!=='running'||jumpHeight>0)return;jumpVelocity=8.2;beep(540,.08);}
@@ -167,11 +174,12 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
  function animate(now:number){if(disposed)return;raf=requestAnimationFrame(animate);const dt=Math.min((now-lastTime)/1000,.04);lastTime=now;const running=state.phase==='running',capturing=state.phase==='capture';if(state.phase!=='paused')clock+=dt;
    if(running){state.elapsed+=dt;state.distance+=state.speed*dt;state.best=Math.max(state.best,state.distance);
     const zf=zoneForDistance(state.distance);
-     if(zf.index!==zoneIndex){zoneIndex=zf.index;state.zone=zf.spec.name;state.flash=zf.spec.banner;flashTime=2.4;drawZoneSign('↑ '+zf.spec.name+'     출구 없음');setCityVariant(zf.index);zoneFog.set(zf.spec.fog);zoneSky.set(zf.spec.sky);zoneLampA.set(zf.spec.lampA);zoneLampB.set(zf.spec.lampB);beep(520,.15);}
+     if(zf.index!==zoneIndex){zoneIndex=zf.index;state.zone=zf.spec.name;state.flash=zf.spec.banner;flashTime=2.4;drawZoneSign('↑ '+zf.spec.name+'     출구 없음');startCityFade(zf.index);zoneFog.set(zf.spec.fog);zoneSky.set(zf.spec.sky);zoneGround.set(zf.spec.ground);zoneLampA.set(zf.spec.lampA);zoneLampB.set(zf.spec.lampB);beep(520,.15);}
     const remaining=ZONE_LENGTH_METERS-(state.distance%ZONE_LENGTH_METERS),nextSpec=zoneForDistance(state.distance+remaining).spec;
     if(remaining<=GATE_LEAD_METERS){gate.visible=true;gate.position.z=-remaining;if(gateZone!==nextSpec.name){gateZone=nextSpec.name;drawGateSign(nextSpec.name==='심야 고속도로'?'전방 톨게이트':'전방 IC','다음: '+nextSpec.name);}}
     else{gate.visible=false;gateZone='';}
-    const blend=1-Math.exp(-dt*1.2);scene.fog!.color.lerp(zoneFog,blend);(scene.background as THREE.Color).lerp(zoneSky,blend);pinkLight.color.lerp(zoneLampA,blend);cyanLight.color.lerp(zoneLampB,blend);
+    const blend=1-Math.exp(-dt*1.2);scene.fog!.color.lerp(zoneFog,blend);(scene.background as THREE.Color).lerp(zoneSky,blend);groundMat.color.lerp(zoneGround,blend);pinkLight.color.lerp(zoneLampA,blend);cyanLight.color.lerp(zoneLampB,blend);
+    if(cityFadeT>=0){cityFadeT+=dt;const fk=Math.min(1,cityFadeT/CITY_FADE_SECONDS);if(fadeFrom)setGroupOpacity(fadeFrom,1-fk);setGroupOpacity(cityGroup,fk);if(fk>=1){if(fadeFrom){setGroupOpacity(fadeFrom,1);fadeFrom.visible=false;fadeFrom=null;}setGroupOpacity(cityGroup,1);cityFadeT=-1;}}
     if(curveDir===0&&state.elapsed>=nextCurveAt){curveDir=Math.random()<.5?-1:1;curveT=0;state.flash=curveDir>0?'⚠ 급커브! 오른쪽이다!':'⚠ 급커브! 왼쪽이다!';flashTime=2.2;chevrons.visible=true;chevBoards.forEach((b,i)=>{b.position.set(i%2===0?-7.2:7.2,0,-15-i*16);(b.children[0] as THREE.Mesh).material=curveDir>0?chevMatR:chevMatL;});beep(200,.4);}
     if(curveDir!==0){curveT+=dt;if(curveT>=CURVE_DURATION_SECONDS){curveDir=0;chevrons.visible=false;nextCurveAt=state.elapsed+CURVE_MIN_INTERVAL_SECONDS+Math.random()*(CURVE_MAX_INTERVAL_SECONDS-CURVE_MIN_INTERVAL_SECONDS);}}
     const ck=curveDir!==0?curveIntensity(curveT):0;state.curve=curveDir!==0;
@@ -179,7 +187,7 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
     if(chevrons.visible)for(const b of chevBoards){b.position.z+=state.speed*dt;if(b.position.z>20)b.position.z-=128;}
     state.speed=mix(state.speed,speedForDistance(state.distance,state.hits)+zf.spec.speedBonus,1-Math.exp(-dt*4));invuln=Math.max(0,invuln-dt);flashTime-=dt;if(flashTime<=0)state.flash='';
    if(jumpHeight>0||jumpVelocity>0){jumpVelocity-=22*dt;jumpHeight=Math.max(0,jumpHeight+jumpVelocity*dt);if(jumpHeight===0)jumpVelocity=0;}
-   player.position.x=mix(player.position.x,lane*3.65,1-Math.exp(-dt*15));player.position.y=jumpHeight;player.rotation.z=clamp((lane*3.65-player.position.x)*-.12,-.22,.22);player.visible=invuln<=0||Math.floor(clock*14)%2===0;animateRunner(player,clock*state.speed/22,jumpHeight>.03?.35:1);
+   player.position.x=mix(player.position.x,lane*3.65,1-Math.exp(-dt*15));player.position.y=jumpHeight;player.rotation.z=clamp((lane*3.65-player.position.x)*-.12,-.22,.22);player.visible=invuln<=0||Math.floor(clock*14)%2===0;animateRunner(player,clock*Math.min(1.15,.6+.4*state.speed/22),jumpHeight>.03?.35:1);
     for(const c of cars){c.previousZ=c.mesh.position.z;
      // Same-direction traffic: every car faces -Z like the player and the
      // relative speed stays BELOW the road scroll, so cars read as slower
@@ -228,7 +236,7 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
    if(captureTime>4.1){state.phase='over';state.speed=0;bgm.pause();beep(85,.8);emit();}
   }
   if(state.phase!=='paused'&&state.phase!=='over'){
-   const drift=state.phase==='ready'?3:state.speed;road.position.z=(road.position.z+drift*dt)%6;cityGroup.children.forEach(g=>{g.position.z+=drift*dt;if(g.position.z>35)g.position.z-=312;});lamps.children.forEach(g=>{g.position.z+=drift*dt;if(g.position.z>35)g.position.z-=LAMP_SPAN;});gantry.position.z+=drift*dt;if(gantry.position.z>25)gantry.position.z=-180;
+    const drift=state.phase==='ready'?3:state.speed;road.position.z=(road.position.z+drift*dt)%6;const scrollCity=(g:THREE.Object3D)=>{g.position.z+=drift*dt;if(g.position.z>35)g.position.z-=312;};cityGroup.children.forEach(scrollCity);if(fadeFrom)fadeFrom.children.forEach(scrollCity);lamps.children.forEach(g=>{g.position.z+=drift*dt;if(g.position.z>35)g.position.z-=LAMP_SPAN;});gantry.position.z+=drift*dt;if(gantry.position.z>25)gantry.position.z=-180;
    for(let i=0;i<160;i++){dustArray[i*3+2]+=drift*dt*.5;if(dustArray[i*3+2]>20)dustArray[i*3+2]=-100;}dustGeometry.attributes.position.needsUpdate=true;
   }
   if(state.phase!=='paused'){camera.position.lerp(targetCamera,1-Math.exp(-dt*4));camera.lookAt(lookTarget);shake=Math.max(0,shake-dt);if(shake>0){camera.position.x+=(Math.random()-.5)*shake*.5;camera.position.y+=(Math.random()-.5)*shake*.25;}}
