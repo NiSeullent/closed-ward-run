@@ -138,6 +138,17 @@ export default function Home() {
     }
   };
   useEffect(() => {
+    if (!expanded) return;
+    const exitWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || document.querySelector('dialog[open]')) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void fullscreen();
+    };
+    window.addEventListener('keydown', exitWithEscape, true);
+    return () => window.removeEventListener('keydown', exitWithEscape, true);
+  }, [expanded]);
+  useEffect(() => {
     const native = () => setExpanded(Boolean(document.fullscreenElement));
     const listener = (event: MessageEvent) => {
       const d = event.data;
