@@ -1,4 +1,4 @@
-# 폐쇄런 · Closed Ward Run 2.1.0
+# 폐쇄런 · Closed Ward Run 2.1.1
 
 ZUKU JUMP용 3D 도주 액션. 최대 100스테이지의 도로를 돌파하세요.
 

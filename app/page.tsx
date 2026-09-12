@@ -147,7 +147,7 @@ export default function Home() {
             <button onClick={() => openPanel('help')}>
               플레이 가이드 <ArrowUpRight size={15} />
             </button>
-            <span className="version">v.2.1.0</span>
+            <span className="version">v.2.1.1</span>
           </div>
         </header>
       )}
