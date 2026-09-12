@@ -151,7 +151,8 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
   let nextDrunkAt=0,nextSpeedAt=40,nextWrongAt=90,drunkActive=false,drunkT=0,drunkBaseX=0,drunkPrevZ=0,speedStage=0,speedT=0,speedLane=0,speedPrevZ=0,wrongActive=false,wrongT=0,wrongVictim=-1,wrongPrevZ=0;
   const zoneFog=new THREE.Color(zoneForDistance(0).spec.fog),zoneSky=new THREE.Color(zoneForDistance(0).spec.sky),zoneGround=new THREE.Color(zoneForDistance(0).spec.ground),zoneLampA=new THREE.Color(zoneForDistance(0).spec.lampA),zoneLampB=new THREE.Color(zoneForDistance(0).spec.lampB);
   // Rotating soundtrack: every mp3 in public/audio plays in order, then loops.
-  const TRACK_URLS=['audio/song1.mp3','audio/closed-run-bgm.mp3'].map(p=>new URL(p,document.baseURI).href);
+  const embeddedTracks=typeof __ZWF_AUDIO_SONG1__==='string'?[__ZWF_AUDIO_SONG1__,__ZWF_AUDIO_CLOSED_RUN__!]:null;
+  const TRACK_URLS=embeddedTracks??['audio/song1.mp3','audio/closed-run-bgm.mp3'].map(p=>new URL(p,document.baseURI).href);
   let trackIndex=0;
   const bgm=new Audio(TRACK_URLS[0]);bgm.preload='auto';bgm.volume=.42;
   const playBgm=()=>{bgm.muted=muted;void bgm.play().catch(()=>{});};
@@ -251,6 +252,4 @@ export function createGame(host:HTMLDivElement,onState:(s:GameSnapshot)=>void):G
  targetCamera.copy(camera.position);lookTarget.set(-16,1,-11);emit();raf=requestAnimationFrame(animate);
  return {start,pause,move,jump,mute(value){muted=value;bgm.muted=value;if(master)master.gain.value=value?0:.22;},getState:()=>({...state}),dispose(){bgm.removeEventListener('ended',nextTrack);bgm.pause();bgm.removeAttribute('src');bgm.load();disposed=true;cancelAnimationFrame(raf);observer.disconnect();window.removeEventListener('keydown',keydown);window.removeEventListener('blur',blur);host.removeEventListener('pointerdown',pointerdown);host.removeEventListener('pointerup',pointerup);void audio?.close();const geometries=new Set<THREE.BufferGeometry>(),materials=new Set<THREE.Material>(),textures=new Set<THREE.Texture>();scene.traverse(o=>{if(o instanceof THREE.Mesh||o instanceof THREE.Points){geometries.add(o.geometry);const ms=Array.isArray(o.material)?o.material:[o.material];ms.forEach(m=>{materials.add(m);if('map'in m&&m.map instanceof THREE.Texture)textures.add(m.map);});}});geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());textures.forEach(t=>t.dispose());renderer.dispose();renderer.domElement.remove();}};
 }
-
-
 

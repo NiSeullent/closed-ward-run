@@ -11,7 +11,9 @@
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
     "format": "oxfmt",
-    "build:pages": "vite build --config vite.pages.config.ts"
+    "build:pages": "vite build --config vite.pages.config.ts",
+    "build:zwf": "vite build --config vite.zwf.config.ts && node scripts/build-zwf.mjs",
+    "verify:zwf": "node scripts/verify-zwf.mjs dist/closed-ward-run.zwf"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",
@@ -46,6 +48,7 @@
     "@types/three": "^0.185.4",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
+    "fflate": "^0.8.3",
     "oxfmt": "0.61.0",
     "oxlint": "1.76.0",
     "oxlint-tsgolint": "7.0.2001",

@@ -30,6 +30,8 @@ Node.js 22.13 이상에서 `npm ci` 후 `npm run dev`로 실행합니다.
 
 `npm run build:pages`는 GitHub Pages용 정적 파일을 `docs/`에 만듭니다. Pages의 배포 소스는 `main` 브랜치의 `/docs`입니다. 변경 후 빌드 결과도 함께 커밋합니다.
 
+`npm run build:zwf`는 동일한 게임을 상대 경로 정적 번들로 만든 뒤 ZUKU `html5-sandbox/1` 프로필의 `dist/closed-ward-run.zwf` 단일 파일로 패키징합니다. `WEBZ` 청크는 CRC가 포함된 ZIP이며, 네트워크 권한 없이 ZUKU Jump 샌드박스에서 실행됩니다. `npm run verify:zwf`로 헤더·청크 CRC·필수 파일을 검사합니다. `zwf-v*` 태그를 푸시하면 GitHub Release에 ZWF가 자동 첨부됩니다.
+
 검사: `node --test tests/rules.test.mjs`, `npx tsc --noEmit`.
 
 게임 로직과 3D 씬은 `app/runner.ts`, 충돌 규칙은 `app/rules.ts`, 캐릭터 모델은 `app/characters.ts`에 있습니다. UI는 `app/page.tsx`와 `app/globals.css`입니다.

@@ -1,0 +1,33 @@
+name: Build ZWF
+
+on:
+  push:
+    branches: [main]
+    tags: ['zwf-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  zwf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:zwf
+      - run: npm run verify:zwf
+      - uses: actions/upload-artifact@v4
+        with:
+          name: closed-ward-run-zwf
+          path: dist/closed-ward-run.zwf
+          if-no-files-found: error
+      - name: Publish tagged ZWF release
+        if: startsWith(github.ref, 'refs/tags/zwf-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/closed-ward-run.zwf --generate-notes --verify-tag
