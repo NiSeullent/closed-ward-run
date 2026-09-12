@@ -9,8 +9,11 @@ const audioDataUrl = (name: string) =>
 export default defineConfig({
   base: './',
   define: {
+    __ZUKU_RUNTIME__: true,
     __ZWF_AUDIO_SONG1__: JSON.stringify(audioDataUrl('song1.mp3')),
-    __ZWF_AUDIO_CLOSED_RUN__: JSON.stringify(audioDataUrl('closed-run-bgm.mp3')),
+    __ZWF_AUDIO_CLOSED_RUN__: JSON.stringify(
+      audioDataUrl('closed-run-bgm.mp3'),
+    ),
   },
   plugins: [react()],
   css: { postcss: { plugins: [tailwindcss()] } },

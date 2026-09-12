@@ -11,6 +11,7 @@
     },
     step(seconds=.04){for(let remaining=seconds;remaining>1e-8;remaining-=.04)animate(lastTime+Math.min(.04,remaining)*1000);emit();},
     render(){actualRender(scene,camera);},
+    enableRendering(){renderer.render=actualRender;},
     car(x:number,z:number){const c=cars.find(c=>!c.mesh.visible)!;c.mesh.visible=true;c.hit=false;c.mesh.position.set(x,0,z);c.previousZ=z;return cars.indexOf(c);},
     event(kind:string,x:number,z:number){if(kind==='speed'){speedStage=2;speedPrevZ=z;speederMesh.position.set(x,0,z);speederMesh.visible=true;}if(kind==='wrong'){wrongActive=true;wrongPrevZ=z;wrongVictim=-1;wrongwayMesh.position.set(x,0,z);wrongwayMesh.visible=true;}if(kind==='drunk'){drunkActive=true;drunkPrevZ=z;drunkBaseX=x;drunkMesh.position.set(x,0,z);drunkMesh.visible=true;}},
     pickup(item:Item,x:number,z:number){const p=pickups[0];p.item=item;p.mesh.position.set(x,0,z);p.mesh.visible=true;},

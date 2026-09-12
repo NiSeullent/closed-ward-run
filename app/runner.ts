@@ -2379,6 +2379,7 @@ export function createGame(
   observer.observe(host);
   resize();
   function keydown(e: KeyboardEvent) {
+    if (e.defaultPrevented || document.querySelector('dialog[open]')) return;
     if (
       (e.target as HTMLElement)?.closest(
         'input,textarea,select,[contenteditable=true]',

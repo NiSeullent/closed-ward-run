@@ -1,3 +1,4 @@
+import { GameDialog } from './GameDialog';
 import { raceOutcome } from './race';
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -12,9 +13,15 @@ import type { GameAPI, GameSnapshot } from './runner';
 export function CloudPanel({
   state,
   game,
+  panel,
+  onClose,
+  onRaceStart,
 }: {
   state: GameSnapshot;
   game: React.RefObject<GameAPI | null>;
+  panel: 'ranking' | 'multiplayer' | null;
+  onClose: () => void;
+  onRaceStart: () => void;
 }) {
   const [content, setContent] = useState(DEFAULT_PROJECT),
     [token, setToken] = useState(''),
@@ -35,6 +42,8 @@ export function CloudPanel({
     started = useRef(false),
     round = useRef<number | null>(null),
     saving = useRef(false);
+  const onRaceStartRef = useRef(onRaceStart);
+  onRaceStartRef.current = onRaceStart;
   latest.current = state;
   const sandbox =
     typeof window !== 'undefined' &&
@@ -125,6 +134,7 @@ export function CloudPanel({
           if (remaining <= 0) {
             started.current = true;
             round.current = r.startsAt;
+            onRaceStartRef.current();
             game.current?.start(r.seed);
           }
         }
@@ -202,162 +212,214 @@ export function CloudPanel({
   }, [state.phase, cloud]);
   const outcome = started.current ? raceOutcome(state, peer) : null;
   return (
-    <section className="cloud-panel" aria-label="ZUKU Cloud">
-      <div>
-        <strong>
-          <img src="./brand/zuku-jump.png" alt="" width="24" height="24" /> ZUKU{' '}
-          <span>JUMP</span> / CLOUD
-        </strong>
-        <p role="status">{status}</p>
-        {room && (
-          <p className="room-status" role="status">
-            {roomStatus}
-          </p>
-        )}
-      </div>
-      {!cloud ? (
-        <>
-          {!sandbox && (
-            <>
-              <label>
-                JUMP 게임 ID
-                <input
-                  value={content}
-                  onChange={(e) => setContent(e.target.value)}
-                  placeholder="등록된 JUMP 콘텐츠 ID"
-                />
-              </label>
-              <label>
-                ZUKU 세션 토큰
-                <input
-                  type="password"
-                  autoComplete="off"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  placeholder="현재 탭에서만 사용"
-                />
-              </label>
-            </>
-          )}
-          <button disabled={busy} onClick={() => void connect()}>
-            {sandbox ? 'ZUKU 계정으로 연결' : 'Cloud 연결'}
-          </button>
-        </>
-      ) : (
-        <>
-          <button disabled={busy} onClick={() => void join(true)}>
-            2인 방 만들기
-          </button>
-          <label>
-            초대 코드
-            <input value={code} onChange={(e) => setCode(e.target.value)} />
-          </label>
-          <button disabled={busy} onClick={() => void join(false)}>
-            참가
-          </button>
-          {room && (
-            <>
-              <output>초대 코드 {room.roomId}</output>
-              {room.hostId === identity.current.id && (
-                <button
-                  disabled={busy || started.current}
-                  onClick={() => {
-                    setBusy(true);
-                    void cloud
-                      .call('room-start', { roomId: room.roomId })
-                      .catch((e) => setStatus(e.message))
-                      .finally(() => setBusy(false));
-                  }}
-                >
-                  함께 출발
-                </button>
-              )}
-              <button disabled={busy} onClick={() => void leave()}>
-                방 나가기
-              </button>
-            </>
-          )}
-          {countdown && <strong>{countdown}</strong>}
-          {outcome && (
-            <strong role="status">
-              레이스 결과 ·{' '}
-              {outcome === 'win'
+    <>
+      {!panel && (countdown || outcome) && (
+        <div className="race-notice" role="status">
+          {countdown ||
+            '레이스 결과 · ' +
+              (outcome === 'win'
                 ? '승리!'
                 : outcome === 'lose'
                   ? '아쉽게 패배'
-                  : '무승부'}
-            </strong>
-          )}
-          {started.current &&
-            state.phase === 'over' &&
-            peer &&
-            peer.phase !== 'over' && (
-              <p>내 도주 종료 · 상대의 도주 종료를 기다립니다.</p>
-            )}
-          {peer && (
-            <p>
-              상대 {Math.floor(peer.distance)}m ·{' '}
-              {Math.floor(state.distance - peer.distance)}m 차이 ·{' '}
-              {peer.phase === 'running' ? '달리는 중' : '대기 / 종료'}
-            </p>
-          )}
-          <button
-            disabled={busy || state.phase !== 'over'}
-            onClick={() => void saveResult()}
-          >
-            기록 저장 / 재시도
-          </button>
-          <button
-            disabled={busy}
-            onClick={() => {
-              setBusy(true);
-              void refresh(cloud)
-                .catch((e) => setStatus(e.message))
-                .finally(() => setBusy(false));
-            }}
-          >
-            랭킹 새로고침
-          </button>
-          <button
-            disabled={!!room}
-            onClick={() => {
-              setCloud(null);
-              setRows([]);
-              setStatus('연결 해제됨');
-            }}
-          >
-            연결 해제
-          </button>
-        </>
+                  : '무승부')}
+        </div>
       )}
-      <details>
-        <summary>클라우드 랭킹 · 캐주얼</summary>
-        <p>플레이어 제출 기록 · 보상 없는 친선 랭킹</p>
-        {rows.length ? (
-          <ol>
-            {rows.map((r) => (
-              <li key={r.id}>
-                {r.name} · {r.distance.toLocaleString()}m · STAGE {r.stage}
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p>{cloud ? '등록된 기록 없음' : 'Cloud 연결 후 표시됩니다.'}</p>
-        )}
-        {cloud && nextOffset !== null && (
-          <button
-            disabled={busy}
-            onClick={() => {
-              setBusy(true);
-              void refresh(cloud, true)
-                .catch((e) => setStatus(e.message))
-                .finally(() => setBusy(false));
-            }}
-          >
-            다음 50명
-          </button>
-        )}
-      </details>
-    </section>
+      <GameDialog
+        open={panel !== null}
+        title={panel === 'multiplayer' ? '멀티플레이' : '클라우드 랭킹'}
+        onClose={onClose}
+      >
+        <section className="cloud-panel" aria-label="ZUKU Cloud">
+          <p className="cloud-status" role="status">
+            {status}
+          </p>
+          {!cloud ? (
+            <div className="cloud-connect">
+              {!sandbox && (
+                <>
+                  <label>
+                    JUMP 게임 ID
+                    <input
+                      value={content}
+                      onChange={(e) => setContent(e.target.value)}
+                      placeholder="등록된 JUMP 콘텐츠 ID"
+                    />
+                  </label>
+                  <label>
+                    ZUKU 세션 토큰
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      value={token}
+                      onChange={(e) => setToken(e.target.value)}
+                      placeholder="현재 탭에서만 사용"
+                    />
+                  </label>
+                </>
+              )}
+              <button
+                className="primary-button"
+                disabled={busy}
+                onClick={() => void connect()}
+              >
+                {sandbox ? 'ZUKU 계정으로 연결' : 'Cloud 연결'}
+              </button>
+              <p className="subtle">
+                {panel === 'ranking'
+                  ? '계정을 연결하면 클라우드 기록을 불러오고 도주 결과를 저장합니다.'
+                  : '계정을 연결하고 친구와 함께 출발하세요.'}
+              </p>
+            </div>
+          ) : (
+            <>
+              {panel === 'multiplayer' && (
+                <>
+                  <div className="dialog-actions">
+                    <button disabled={busy} onClick={() => void join(true)}>
+                      2인 방 만들기
+                    </button>
+                    <label>
+                      초대 코드
+                      <input
+                        value={code}
+                        onChange={(e) => setCode(e.target.value)}
+                      />
+                    </label>
+                    <button
+                      disabled={busy || !code.trim()}
+                      onClick={() => void join(false)}
+                    >
+                      참가
+                    </button>
+                  </div>
+                  {room && (
+                    <>
+                      <output>초대 코드 {room.roomId}</output>
+                      <p className="room-status" role="status">
+                        {roomStatus}
+                      </p>
+                      <div className="dialog-actions">
+                        {room.hostId === identity.current.id && (
+                          <button
+                            className="primary-button"
+                            disabled={busy || started.current}
+                            onClick={() => {
+                              setBusy(true);
+                              void cloud
+                                .call('room-start', { roomId: room.roomId })
+                                .catch((e) => setStatus(e.message))
+                                .finally(() => setBusy(false));
+                            }}
+                          >
+                            함께 출발
+                          </button>
+                        )}
+                        <button disabled={busy} onClick={() => void leave()}>
+                          방 나가기
+                        </button>
+                      </div>
+                    </>
+                  )}
+                  {countdown && <strong role="status">{countdown}</strong>}
+                  {outcome && (
+                    <strong role="status">
+                      레이스 결과 ·{' '}
+                      {outcome === 'win'
+                        ? '승리!'
+                        : outcome === 'lose'
+                          ? '아쉽게 패배'
+                          : '무승부'}
+                    </strong>
+                  )}
+                  {started.current &&
+                    state.phase === 'over' &&
+                    peer &&
+                    peer.phase !== 'over' && (
+                      <p>내 도주 종료 · 상대의 도주 종료를 기다립니다.</p>
+                    )}
+                  {peer && (
+                    <p>
+                      상대 {Math.floor(peer.distance)}m ·{' '}
+                      {Math.floor(state.distance - peer.distance)}m 차이 ·{' '}
+                      {peer.phase === 'running' ? '달리는 중' : '대기 / 종료'}
+                    </p>
+                  )}
+                </>
+              )}
+              {panel === 'ranking' && (
+                <>
+                  <div className="ranking-heading">
+                    <span>최고 도주 거리</span>
+                    <button
+                      disabled={busy}
+                      onClick={() => {
+                        setBusy(true);
+                        void refresh(cloud)
+                          .catch((e) => setStatus(e.message))
+                          .finally(() => setBusy(false));
+                      }}
+                    >
+                      랭킹 새로고침
+                    </button>
+                  </div>
+                  {rows.length ? (
+                    <ol className="ranking-list">
+                      {rows.map((r, index) => (
+                        <li key={r.id}>
+                          <span className="rank-number">{index + 1}</span>
+                          <span className="rank-player">
+                            {r.name}
+                            <small>STAGE {r.stage}</small>
+                          </span>
+                          <strong>
+                            {r.distance.toLocaleString()}
+                            <small> m</small>
+                          </strong>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="empty-ranking">등록된 기록 없음</p>
+                  )}
+                  {nextOffset !== null && (
+                    <button
+                      disabled={busy}
+                      onClick={() => {
+                        setBusy(true);
+                        void refresh(cloud, true)
+                          .catch((e) => setStatus(e.message))
+                          .finally(() => setBusy(false));
+                      }}
+                    >
+                      다음 50명
+                    </button>
+                  )}
+                  <button
+                    disabled={busy || state.phase !== 'over'}
+                    onClick={() => void saveResult()}
+                  >
+                    기록 저장 / 재시도
+                  </button>
+                  <p className="subtle">
+                    플레이어 제출 기록 · 보상 없는 친선 랭킹
+                  </p>
+                </>
+              )}
+              <button
+                className="text-button"
+                disabled={!!room}
+                onClick={() => {
+                  setCloud(null);
+                  setRows([]);
+                  setStatus('연결 해제됨');
+                }}
+              >
+                연결 해제
+              </button>
+            </>
+          )}
+        </section>
+      </GameDialog>
+    </>
   );
 }
