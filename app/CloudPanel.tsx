@@ -1,3 +1,4 @@
+import { raceOutcome } from './race';
 import { useEffect, useRef, useState } from 'react';
 import {
   Cloud,
@@ -19,6 +20,7 @@ export function CloudPanel({
     [token, setToken] = useState(''),
     [cloud, setCloud] = useState<Cloud | null>(null),
     [status, setStatus] = useState('ZUKU Cloud 연결 전'),
+    [roomStatus, setRoomStatus] = useState(''),
     [rows, setRows] = useState<Score[]>([]),
     [nextOffset, setNextOffset] = useState<number | null>(null),
     [code, setCode] = useState(''),
@@ -30,7 +32,9 @@ export function CloudPanel({
     latest = useRef(state),
     saved = useRef(false),
     seq = useRef(0),
-    started = useRef(false);
+    started = useRef(false),
+    round = useRef<number | null>(null),
+    saving = useRef(false);
   latest.current = state;
   const sandbox =
     typeof window !== 'undefined' &&
@@ -73,9 +77,10 @@ export function CloudPanel({
       seq.current =
         r.members?.find((m) => m.id === identity.current.id)?.seq ?? 0;
       started.current = false;
+      round.current = null;
       setRoom(r);
       setCode(r.roomId);
-      setStatus('방장이 시작하면 3초 후 함께 출발합니다.');
+      setRoomStatus('방장이 시작하면 3초 후 함께 출발합니다.');
     } catch (e) {
       setRoom(null);
       setStatus((e as Error).message);
@@ -98,6 +103,9 @@ export function CloudPanel({
             distance: s.distance,
             phase: s.phase,
             updated: Date.now(),
+            elapsed: s.elapsed,
+            cleared: s.cleared,
+            round: round.current,
           },
         });
         if (cancelled) return;
@@ -105,7 +113,8 @@ export function CloudPanel({
           (m) =>
             m.id !== identity.current.id && r.serverTime - m.seenAt < 10000,
         );
-        const p = parsePeer(other?.state);
+        const remote = parsePeer(other?.state);
+        const p = remote && remote.round === round.current ? remote : null;
         setPeer(p);
         game.current?.setRival(p);
         if (r.startsAt && !started.current) {
@@ -115,15 +124,18 @@ export function CloudPanel({
           );
           if (remaining <= 0) {
             started.current = true;
+            round.current = r.startsAt;
             game.current?.start(r.seed);
           }
         }
-        setStatus(p ? '상대 연결됨 · 2인 레이스' : '상대 대기 중 / 연결 끊김');
+        setRoomStatus(
+          p ? '상대 연결됨 · 2인 레이스' : '상대 대기 중 / 연결 끊김',
+        );
       } catch (e) {
         if (!cancelled) {
           setPeer(null);
           game.current?.setRival(null);
-          setStatus((e as Error).message);
+          setRoomStatus((e as Error).message);
         }
       } finally {
         if (!cancelled) timer = setTimeout(poll, 500);
@@ -138,12 +150,15 @@ export function CloudPanel({
   }, [cloud, room, game]);
   async function leave() {
     if (!cloud || !room) return;
+    const leaving = room.roomId;
+    setRoom(null);
+    setRoomStatus('');
+    setPeer(null);
+    setCountdown('');
+    game.current?.setRival(null);
     setBusy(true);
     try {
-      await cloud.call('room-leave', { roomId: room.roomId });
-      setRoom(null);
-      setPeer(null);
-      setCountdown('');
+      await cloud.call('room-leave', { roomId: leaving });
       setStatus('방에서 나왔습니다.');
     } catch (e) {
       setStatus((e as Error).message);
@@ -152,7 +167,8 @@ export function CloudPanel({
     }
   }
   async function saveResult() {
-    if (!cloud) return;
+    if (!cloud || saving.current) return;
+    saving.current = true;
     setBusy(true);
     try {
       const s = latest.current;
@@ -173,6 +189,7 @@ export function CloudPanel({
       saved.current = false;
       setStatus(`저장 실패 · 재시도 가능: ${(e as Error).message}`);
     } finally {
+      saving.current = false;
       setBusy(false);
     }
   }
@@ -183,6 +200,7 @@ export function CloudPanel({
       void saveResult();
     }
   }, [state.phase, cloud]);
+  const outcome = started.current ? raceOutcome(state, peer) : null;
   return (
     <section className="cloud-panel" aria-label="ZUKU Cloud">
       <div>
@@ -191,6 +209,11 @@ export function CloudPanel({
           <span>JUMP</span> / CLOUD
         </strong>
         <p role="status">{status}</p>
+        {room && (
+          <p className="room-status" role="status">
+            {roomStatus}
+          </p>
+        )}
       </div>
       {!cloud ? (
         <>
@@ -255,9 +278,26 @@ export function CloudPanel({
             </>
           )}
           {countdown && <strong>{countdown}</strong>}
+          {outcome && (
+            <strong role="status">
+              레이스 결과 ·{' '}
+              {outcome === 'win'
+                ? '승리!'
+                : outcome === 'lose'
+                  ? '아쉽게 패배'
+                  : '무승부'}
+            </strong>
+          )}
+          {started.current &&
+            state.phase === 'over' &&
+            peer &&
+            peer.phase !== 'over' && (
+              <p>내 도주 종료 · 상대의 도주 종료를 기다립니다.</p>
+            )}
           {peer && (
             <p>
               상대 {Math.floor(peer.distance)}m ·{' '}
+              {Math.floor(state.distance - peer.distance)}m 차이 ·{' '}
               {peer.phase === 'running' ? '달리는 중' : '대기 / 종료'}
             </p>
           )}

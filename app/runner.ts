@@ -1,3 +1,4 @@
+import { createRoadScenery } from './road-scenery';
 import {
   stageAt,
   STAGE_LENGTH,
@@ -95,12 +96,14 @@ export function createGame(
   });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6));
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.25;
   host.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
+  const roadScenery = createRoadScenery(scene);
+  roadScenery.enter(stageAt(0).map);
   scene.background = new THREE.Color('#20152f');
   scene.fog = new THREE.FogExp2('#291934', 0.015);
   const camera = new THREE.PerspectiveCamera(49, 1, 0.1, 240);
@@ -1245,6 +1248,7 @@ export function createGame(
     helicopterActive = false;
     zoneIndex = -1;
     setCityVariant(0);
+    roadScenery.enter(stageAt(0).map);
     curveDir = 0;
     curveT = 0;
     nextCurveAt = 30 + random() * 15;
@@ -1401,7 +1405,15 @@ export function createGame(
     scene.add(mesh);
     return { mesh, life: 0 };
   });
-  const bombs = Array.from({length:4},()=>{const mesh=new THREE.Mesh(new THREE.SphereGeometry(.35,10,8),mat('#FFD600',true));mesh.visible=false;scene.add(mesh);return {mesh};});
+  const bombs = Array.from({ length: 4 }, () => {
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.35, 10, 8),
+      mat('#FFD600', true),
+    );
+    mesh.visible = false;
+    scene.add(mesh);
+    return { mesh };
+  });
   const pickups = Array.from({ length: 6 }, () => {
     const mesh = new THREE.Group();
     box(mesh, 0.8, 0.8, 0.8, 0, 1, 0, '#EC008C', true);
@@ -1417,14 +1429,18 @@ export function createGame(
     scene.add(mesh);
     return { mesh };
   });
-  function explode(x: number, z: number) {
+  function burst(x: number, z: number, color = '#ff852b') {
     const e = explosions.find((v) => !v.mesh.visible) ?? explosions[0];
     e.life = 0.65;
+    e.mesh.material.color.set(color);
     e.mesh.position.set(x, 1, z);
     e.mesh.scale.setScalar(0.2);
     e.mesh.visible = true;
     shake = Math.max(shake, 0.6);
     beep(80, 0.35);
+  }
+  function explode(x: number, z: number) {
+    burst(x, z);
     if (blastHits(player.position.x, 0, x, z)) hit();
     for (const c of cars) {
       if (
@@ -1443,6 +1459,7 @@ export function createGame(
     dashTime = 1.1;
     state.boosting = true;
     state.distance = dashDestination(state.distance);
+    state.best = Math.max(state.best, state.distance);
     state.flash = '돌진! 다음 스테이지로 돌파';
     flashTime = 2;
     beep(980, 0.3);
@@ -1459,6 +1476,17 @@ export function createGame(
     if (item === 'medkit') state.hits = Math.max(0, state.hits - 1);
     if (item === 'emp') {
       empTime = 10;
+      for (const c of cops)
+        if (c.visible) {
+          burst(c.position.x, c.position.z, '#00BCF2');
+          c.visible = false;
+        }
+      if (taserPolice.visible)
+        burst(taserPolice.position.x, taserPolice.position.z, '#00BCF2');
+      if (helicopter.visible)
+        burst(helicopter.position.x, helicopter.position.z, '#00BCF2');
+      state.police = 0;
+      state.flash = '경찰 부대 파괴! 지원 병력까지 10초';
       taserActive = false;
       taser.visible = false;
       taserPolice.visible = false;
@@ -1481,7 +1509,11 @@ export function createGame(
         if (h.mesh.position.z > -22) h.mesh.visible = false;
     }
     if (item === 'throw') {
-      const bomb=bombs.find(b=>!b.mesh.visible);if(bomb){bomb.mesh.position.set(lane*3.65,1.2,-1);bomb.mesh.visible=true;}
+      const bomb = bombs.find((b) => !b.mesh.visible);
+      if (bomb) {
+        bomb.mesh.position.set(lane * 3.65, 1.2, -1);
+        bomb.mesh.visible = true;
+      }
     }
     emit();
   }
@@ -1509,6 +1541,7 @@ export function createGame(
       state.distance = MAX_STAGE * STAGE_LENGTH;
       state.phase = 'over';
       state.cleared = true;
+      state.progress = 1;
       state.speed = 0;
       bgm.pause();
       try {
@@ -1584,7 +1617,27 @@ export function createGame(
       }
       if (h.mesh.position.z > 15) h.mesh.visible = false;
     }
-    for (const b of bombs) {if(!b.mesh.visible)continue;const previous=b.mesh.position.z;b.mesh.position.z-=65*dt;b.mesh.position.y=1.2+Math.sin(-b.mesh.position.z*.05)*1.5;const target=cars.find(c=>c.mesh.visible&&!c.hit&&Math.abs(c.mesh.position.x-b.mesh.position.x)<1.5&&c.mesh.position.z<=previous+2&&c.mesh.position.z>=b.mesh.position.z-2);if(target||b.mesh.position.z<-60){explode(b.mesh.position.x,target?.mesh.position.z??b.mesh.position.z);b.mesh.visible=false;}}
+    for (const b of bombs) {
+      if (!b.mesh.visible) continue;
+      const previous = b.mesh.position.z;
+      b.mesh.position.z -= 65 * dt;
+      b.mesh.position.y = 1.2 + Math.sin(-b.mesh.position.z * 0.05) * 1.5;
+      const target = cars.find(
+        (c) =>
+          c.mesh.visible &&
+          !c.hit &&
+          Math.abs(c.mesh.position.x - b.mesh.position.x) < 1.5 &&
+          c.mesh.position.z <= previous + 2 &&
+          c.mesh.position.z >= b.mesh.position.z - 2,
+      );
+      if (target || b.mesh.position.z < -60) {
+        explode(
+          b.mesh.position.x,
+          target?.mesh.position.z ?? b.mesh.position.z,
+        );
+        b.mesh.visible = false;
+      }
+    }
     for (const e of explosions) {
       if (!e.mesh.visible) continue;
       e.life -= dt;
@@ -1611,11 +1664,18 @@ export function createGame(
     if (state.phase !== 'paused') clock += dt;
     if (running) {
       state.elapsed += dt;
-      state.distance += state.speed * dt;
+      state.distance = Math.min(
+        MAX_STAGE * STAGE_LENGTH,
+        state.distance + state.speed * dt,
+      );
+      roadScenery.tick(state.speed * dt);
       state.best = Math.max(state.best, state.distance);
       state.stage = stageAt(state.distance, state.route).stage;
       tickMechanics(dt);
-      if (state.cleared) { renderer.render(scene, camera); return; }
+      if (state.cleared) {
+        renderer.render(scene, camera);
+        return;
+      }
       const stageInfo = stageAt(state.distance, state.route);
       const base = zoneForDistance(stageInfo.map.look * ZONE_LENGTH_METERS);
       const zf = {
@@ -1639,6 +1699,7 @@ export function createGame(
         flashTime = 2.4;
         drawZoneSign('↑ ' + zf.spec.name + '     출구 없음');
         startCityFade(zf.index);
+        roadScenery.enter(stageInfo.map);
         zoneFog.set(zf.spec.fog);
         zoneSky.set(zf.spec.sky);
         zoneGround.set(zf.spec.ground);
@@ -1654,8 +1715,16 @@ export function createGame(
         if (gateZone !== nextSpec.name) {
           gateZone = nextSpec.name;
           drawGateSign(
-            '← 안전 경로 | 우회 경로 →',
-            '중앙 충돌! 다음: ' + nextSpec.name,
+            state.stage === MAX_STAGE
+              ? '최종 탈출구'
+              : '← ' +
+                  stageAt(state.distance + remaining, 'left').map.name +
+                  ' | ' +
+                  stageAt(state.distance + remaining, 'right').map.name +
+                  ' →',
+            state.stage === MAX_STAGE
+              ? '100 STAGES · 앞으로 돌파!'
+              : '가운데로 가면 충돌 후 왼쪽 진입',
           );
         }
       } else {
@@ -1877,7 +1946,11 @@ export function createGame(
           )
         ) {
           hit();
-          state.flash = '과속 차량과 접촉!';
+          spawnWreck(speederMesh.position.x, speederMesh.position.z);
+          speedStage = 0;
+          speederMesh.visible = false;
+          nextSpeedAt = state.elapsed + 40 + random() * 30;
+          state.flash = '과속 차량 추돌 · 폭발!';
           flashTime = 1.2;
         }
         if (speedPrevZ > 2 && speederMesh.position.z <= 2) {
@@ -1895,7 +1968,12 @@ export function createGame(
         let vi = -1,
           vz = -1e9;
         cars.forEach((c, i) => {
-          if (c.mesh.position.z < -15 && c.mesh.position.z > vz) {
+          if (
+            c.mesh.visible &&
+            !c.hit &&
+            c.mesh.position.z < -15 &&
+            c.mesh.position.z > vz
+          ) {
             vz = c.mesh.position.z;
             vi = i;
           }
@@ -1926,10 +2004,19 @@ export function createGame(
           )
         ) {
           hit();
-          state.flash = '역주행 차량과 충돌!';
+          spawnWreck(wrongwayMesh.position.x, wrongwayMesh.position.z);
+          wrongActive = false;
+          wrongwayMesh.visible = false;
+          nextWrongAt = state.elapsed + 50 + random() * 40;
+          state.flash = '역주행 차량 추돌 · 폭발!';
           flashTime = 1.4;
         }
-        if (vc && wrongwayMesh.position.z >= vc.mesh.position.z - 2.5) {
+        if (
+          wrongActive &&
+          vc &&
+          vc.mesh.visible &&
+          wrongwayMesh.position.z >= vc.mesh.position.z - 2.5
+        ) {
           vc.hit = true;
           vc.mesh.visible = false;
           spawnWreck(vc.mesh.position.x, vc.mesh.position.z);
@@ -1954,6 +2041,60 @@ export function createGame(
             shake = 0.5;
           }
           nextWrongAt = state.elapsed + 50 + random() * 40;
+        }
+      }
+      for (const event of [
+        {
+          mesh: speederMesh,
+          previous: speedPrevZ,
+          active: speedStage === 2,
+          stop: () => {
+            speedStage = 0;
+            nextSpeedAt = state.elapsed + 45;
+          },
+        },
+        {
+          mesh: drunkMesh,
+          previous: drunkPrevZ,
+          active: drunkActive,
+          stop: () => {
+            drunkActive = false;
+            nextDrunkAt = state.elapsed + 45;
+          },
+        },
+        {
+          mesh: wrongwayMesh,
+          previous: wrongPrevZ,
+          active: wrongActive,
+          stop: () => {
+            wrongActive = false;
+            nextWrongAt = state.elapsed + 55;
+          },
+        },
+      ]) {
+        if (!event.active || !event.mesh.visible) continue;
+        const victim = cars.find(
+          (c) =>
+            c.mesh.visible &&
+            !c.hit &&
+            Math.abs(c.mesh.position.x - event.mesh.position.x) < 2.2 &&
+            Math.min(
+              event.previous - c.previousZ,
+              event.mesh.position.z - c.mesh.position.z,
+            ) <= 3 &&
+            Math.max(
+              event.previous - c.previousZ,
+              event.mesh.position.z - c.mesh.position.z,
+            ) >= -3,
+        );
+        if (victim) {
+          victim.hit = true;
+          victim.mesh.visible = false;
+          event.mesh.visible = false;
+          event.stop();
+          spawnWreck(victim.mesh.position.x, victim.mesh.position.z);
+          state.flash = '차량 연쇄 추돌! 폭발 반경을 피해!';
+          flashTime = 2;
         }
       }
       // Crash wrecks: static obstacles with blinking beacons.
@@ -2313,7 +2454,14 @@ export function createGame(
       bgm.muted = value;
       if (master) master.gain.value = value ? 0 : 0.22;
     },
-    getState: () => ({ ...state }),
+    getState: () => ({
+      ...state,
+      lane,
+      jumping: jumpHeight > 0.02,
+      jumpHeight,
+      helicopter: helicopterActive,
+      taser: taserActive,
+    }),
     dispose() {
       bgm.removeEventListener('ended', nextTrack);
       bgm.pause();
@@ -2322,6 +2470,7 @@ export function createGame(
       disposed = true;
       cancelAnimationFrame(raf);
       observer.disconnect();
+      roadScenery.dispose();
       window.removeEventListener('keydown', keydown);
       window.removeEventListener('blur', blur);
       host.removeEventListener('pointerdown', pointerdown);

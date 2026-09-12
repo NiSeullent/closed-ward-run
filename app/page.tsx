@@ -105,7 +105,7 @@ export default function Home() {
           >
             플레이 가이드 <ArrowUpRight size={15} />
           </button>
-          <span className="version">v.2.0</span>
+          <span className="version">v.2.0.1</span>
         </div>
       </header>
       <section
@@ -404,7 +404,9 @@ export default function Home() {
                 </div>
                 <div>
                   <span>수배 기록</span>
-                  <strong className="stars-final">★★★★</strong>
+                  <strong className="stars-final">
+                    {state.hits ? '★'.repeat(state.hits) : '수배 없음'}
+                  </strong>
                 </div>
               </div>
               <button className="start-button" onClick={start}>

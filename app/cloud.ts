@@ -13,6 +13,9 @@ export type Peer = {
   distance: number;
   phase: string;
   updated: number;
+  elapsed: number;
+  cleared: boolean;
+  round: number | null;
 };
 export type Room = {
   roomId: string;
@@ -92,7 +95,11 @@ export function parsePeer(p: unknown): Peer | null {
     v.distance >= 0 &&
     v.distance <= 36000 &&
     [-1, 0, 1].includes(v.lane) &&
-    typeof v.phase === 'string'
+    ['ready', 'running', 'paused', 'capture', 'over'].includes(v.phase) &&
+    Number.isFinite(v.elapsed) &&
+    v.elapsed >= 0 &&
+    typeof v.cleared === 'boolean' &&
+    (v.round === null || Number.isFinite(v.round))
     ? v
     : null;
 }

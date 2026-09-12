@@ -1,0 +1,6 @@
+<!doctype html><html><body style="margin:0;background:#101820"><div id="host" style="width:800px;height:600px"></div><script>window.requestAnimationFrame=()=>1;window.cancelAnimationFrame=()=>{};</script><script type="module">
+import {createGame} from '/app/runner.ts';
+import {runAudit} from './scenarios.js';
+window.game=createGame(document.getElementById('host'),()=>{});window.game.mute(true);
+window.runEngineAudit=()=>runAudit(window.game,window.engineProbe);
+</script></body></html>
