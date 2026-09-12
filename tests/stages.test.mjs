@@ -1,0 +1,6 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {stageAt,MAX_STAGE,STAGE_LENGTH,MAPS,forkChoice,dashDestination,blastHits} from '../app/stages.ts';
+test('100 bounded stages, completion occurs only after final stage',()=>{for(let i=1;i<=100;i++){assert.equal(stageAt((i-1)*STAGE_LENGTH).stage,i);assert.equal(stageAt((i-1)*STAGE_LENGTH).complete,false);}assert.equal(stageAt(36000).complete,true);assert.equal(stageAt(999999).stage,100);assert.equal(stageAt(-1).stage,1);assert.equal(stageAt(NaN).stage,1);assert.equal(MAX_STAGE,100);});
+test('branch center crashes into left while right changes map',()=>{assert.deepEqual(forkChoice(0),{route:'left',collision:true});assert.deepEqual(forkChoice(1),{route:'right',collision:false});assert.notEqual(stageAt(360,'left').map,stageAt(360,'right').map);});
+test('dash skips a single stage and cannot exceed ending',()=>{assert.equal(dashDestination(12),360);assert.equal(dashDestination(360),720);assert.equal(dashDestination(35999),36000);assert.equal(dashDestination(36000),36000);});
+test('blast radial range, differentiated maps and increasing difficulty',()=>{assert.equal(blastHits(0,0,3,4),true);assert.equal(blastHits(0,0,6.01,0),false);assert.equal(MAPS.length,10);assert.equal(MAPS[3].police,2);assert.ok(stageAt(35000).difficulty>stageAt(0).difficulty);});
