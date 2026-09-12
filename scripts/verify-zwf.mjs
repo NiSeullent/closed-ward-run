@@ -9,4 +9,7 @@ const web = chunks.find((chunk) => chunk.id === PROFILE_CHUNK);
 const files = unzipSync(web.payload);
 if (!files['index.html']) throw new Error('WEBZ archive has no index.html');
 if (!files['jump.manifest.json']) throw new Error('WEBZ archive has no jump.manifest.json');
+for (const [name, bytes] of Object.entries(files)) {
+  if (name.startsWith('tests/') || (name.endsWith('.js') && new TextDecoder().decode(bytes).includes('engineProbe'))) throw new Error('Test controls leaked into production package');
+}
 console.log(JSON.stringify({ valid: true, profile: 'html5-sandbox/1', files: Object.keys(files).length }));

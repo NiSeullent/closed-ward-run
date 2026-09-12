@@ -1,0 +1,6 @@
+<!doctype html><html><body style="margin:0;background:#101820"><iframe id="game" title="Game" style="width:100vw;height:100vh;border:0" sandbox="allow-scripts allow-pointer-lock"></iframe><script type="module">
+import {createGameCloudBridge} from '/output/playwright/bridge.js';
+const frame=document.querySelector('iframe'),session=crypto.randomUUID(),user=new URLSearchParams(location.search).get('user')||'1';
+const bridge=createGameCloudBridge({contentId:'cloud-game',session,frame:()=>frame.contentWindow,signal:new AbortController().signal,getToken:()=>`cloud-test-${user}`});
+addEventListener('message',bridge);frame.src='/index.html?zwf-session='+session;
+</script></body></html>
