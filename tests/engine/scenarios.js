@@ -18,43 +18,54 @@ export function runAudit(game, probe) {
       ...patch,
     });
   };
-  check(
-    'All 100 stages and all ten route scenery variants run in the actual engine',
-    () => {
-      const maps = new Set();
-      for (let n = 1; n <= 100; n++) {
-        reset({ distance: (n - 1) * 360 + 1, lane: -1 });
-        probe.step();
-        const v = probe.inspect();
-        assert(v.state.stage === n, `stage ${n}`);
-        assert(v.state.phase === 'running', `running ${n}`);
-        assert(v.scenery === v.state.zone, `scenery ${n}`);
-        assert(v.sceneryMeshes > 0, `meshes ${n}`);
-        maps.add(v.scenery);
+  check('All story stages, Panmunjeom and every North Korea scenery render', () => {
+    const maps = new Set();
+    for(let n=1;n<=400;n++) {
+      reset({distance:(n-1)*360+1,lane:-1});probe.step();const v=probe.inspect();
+      assert(v.state.stage===n, 'stage '+n);assert(v.state.phase==='running','running '+n);
+      assert(v.scenery===v.state.zone && v.sceneryMeshes>0,'scenery '+n);maps.add(v.scenery);
+      if(n===49)assert(v.state.zone==='판문점','Panmunjeom');
+      if(n>=50 && n<80)assert(['북한 국경도로','북한 산악도로','평양 대로','북한 군수기지','아오지 탄광로'].includes(v.state.zone),'North Korea '+n);
+    }
+    assert(maps.size>90,'world map variety');
+  });
+  check('400 is playable; clearing it runs hospital dialogue, credits and optional endless', () => {
+    reset({distance:399*360+1,lane:-1});probe.step();
+    assert(!game.getState().cleared && game.getState().stage===400,'400 is playable');
+    reset({distance:400*360-.1,lane:-1});probe.step();
+    assert(game.getState().cleared && game.getState().stage===400,'400 clear');
+    assert(game.getState().distance===144000,'bounded story');
+    assert(game.getState().ending==='hospital','hospital opening');
+    game.continueEndless();assert(game.getState().mode==='story','credits gate');
+    probe.step(3.1);assert(game.getState().ending==='discharge','nurse dialogue');
+    game.skipEnding();assert(game.getState().ending==='credits','credits reachable');
+    game.skipEnding();assert(game.getState().ending==='done','credits skip');
+    game.continueEndless();assert(game.getState().mode==='endless' && game.getState().phase==='running','endless resumes');
+    probe.arrange({mode:'endless',distance:144000,lane:-1});probe.step();
+    assert(game.getState().stage===401 && !game.getState().cleared,'endless beyond 400');
+    game.boost();probe.step();assert(game.getState().stage===402,'endless dash');
+    game.start();assert(game.getState().mode==='story' && game.getState().stage===1,'story restart');
+  });
+  check('Both bosses hold progression, telegraph damage, accept aimed attacks and cannot be dash-skipped', () => {
+    for(const stage of [55,70]) {
+      reset({distance:(stage-1)*360+1,lane:-1,invuln:100});probe.step();
+      let boss=game.getState().boss;assert(boss && !boss.defeated,'boss '+stage);
+      const distance=game.getState().distance;game.boost();probe.step(.1);
+      assert(game.getState().distance===distance,'no boss skip');
+      const hp=game.getState().boss.hp;
+      game.move(1);probe.step(.9);game.attack();assert(game.getState().boss.hp<hp,'aimed attack');
+      let count=0;
+      while(!game.getState().boss.defeated && count++<100) {
+        const state=game.getState();game.move(state.boss.lane-state.lane);probe.step(.4);game.attack();
       }
-      assert(maps.size === 10, 'ten maps');
-    },
-  );
-  check(
-    'Every natural stage boundary advances once, with final completion at 36000m',
-    () => {
-      for (let n = 1; n <= 100; n++) {
-        reset({ distance: n * 360 - 0.1, lane: -1 });
-        probe.step();
-        const s = game.getState();
-        assert(s.stage === Math.min(100, n + 1), `boundary ${n}`);
-        assert(s.cleared === (n === 100), `clear ${n}`);
-      }
-      const s = game.getState();
-      assert(
-        s.distance === 36000 && s.best === 36000 && s.progress === 1,
-        'bounded completion',
-      );
-      probe.step(1);
-      game.boost();
-      assert(game.getState().distance === 36000, 'terminal distance');
-    },
-  );
+      assert(game.getState().boss.defeated,'boss defeat');probe.step(.2);
+      assert(game.getState().distance>distance,'progress resumes');
+    }
+    reset({distance:54*360+1,lane:-1});probe.step();probe.step(1.6);
+    let boss=game.getState().boss;assert(boss.warning>0&&boss.attackLanes.length===1,'telegraph');
+    game.move(boss.attackLanes[0]-game.getState().lane);probe.step(1.5);
+    assert(game.getState().hits===1,'telegraphed attack damage');
+  });
   check(
     'Left/right branches select different maps; center crashes and moves left',
     () => {
@@ -245,13 +256,61 @@ export function runAudit(game, probe) {
       assert(probe.inspect().x > ice, 'ice inertia');
     },
   );
-  check('Later stages increase actual running speed for the same map', () => {
-    reset({ distance: 1, lane: -1 });
-    probe.step(1);
-    const early = game.getState().speed;
-    reset({ distance: 32401, lane: -1 });
-    probe.step(1);
-    assert(game.getState().speed > early, 'difficulty ramp');
+  check('World travel keeps stage 80 and 400 physical running speed comparable', () => {
+    reset({ distance: 79*360+1, lane: -1 }); probe.step(.5);
+    const china=game.getState().speed;
+    reset({ distance: 399*360+1, lane: -1 }); probe.step(.5);
+    const somalia=game.getState().speed;
+    assert(Math.abs(china-somalia)<4 && Math.max(china,somalia)<40,'stable physical speed');
+  });
+  check('World event warning is harmless; unsafe active lane takes one readable hit', () => {
+    reset({distance:80*360+1,lane:0}); probe.step(2.1);
+    let event=game.getState().worldEvent;
+    assert(event?.phase==='warning' && event.kinds.includes('lantern'),'lantern warning');
+    game.move((event.safeLane===-1?1:-1)-game.getState().lane);
+    probe.step(2.1); assert(game.getState().hits===0,'full warning window');
+    probe.step(.4); assert(game.getState().hits===1,'active event damage');
+    probe.step(1.5); assert(game.getState().hits===1,'one hit per encounter');
+  });
+  check('Marked safe lane suppresses unrelated cars, barriers and police in Somalia', () => {
+    reset({distance:384*360+1,lane:-1,hits:2});probe.step(.8);
+    const event=game.getState().worldEvent;
+    assert(event?.phase==='warning' && event.kinds.length===3,'three event finale');
+    game.move(event.safeLane-game.getState().lane);probe.step(.4);
+    const x=event.safeLane*3.65;
+    probe.car(x,-1);probe.barrier(x,-1);probe.event('wrong',x,-1);
+    probe.step(.04);
+    let view=probe.inspect();
+    assert(view.state.hits===2,'safe lane protects against ordinary threats');
+    assert(view.cars.every(c=>!c.visible) && view.hazards===0 && view.police===0 && !view.wrong,'unrelated threats suppressed');
+    probe.step(5.7);assert(game.getState().hits===2,'all three active threats retain safe lane');
+  });
+  check('An event safe center lane crosses the next stage without a surprise fork penalty', () => {
+    reset({distance:384*360+1,lane:0});probe.step(.8);
+    const event=game.getState().worldEvent;
+    assert(event?.safeLane===0 && event.phase==='warning','center lane promise');
+    probe.arrange({distance:385*360-.1,lane:0,hits:0,speed:22});
+    probe.step(.04);
+    assert(game.getState().stage===386,'crossed stage boundary');
+    assert(game.getState().hits===0 && game.getState().lane===-1,'safe automatic left fork');
+  });
+  check('Gravity event can be jumped while the same grounded lane takes damage', () => {
+    for(const jumping of [false,true]) {
+      reset({distance:110*360+1,lane:-1});probe.step(2.1);
+      const event=game.getState().worldEvent;assert(event?.kinds.includes('gravity'),'gravity profile');
+      game.move((event.safeLane===-1?1:-1)-game.getState().lane);
+      probe.step(2.05);if(jumping)game.jump();probe.step(.4);
+      assert(game.getState().hits===(jumping?0:1),'jump decision '+jumping);
+    }
+  });
+  check('Active portal responds to the real boost action by moving to the safe lane', () => {
+    reset({distance:81*360+1,lane:-1});probe.step(2.1);
+    const event=game.getState().worldEvent;assert(event?.kinds.includes('portal'),'portal profile');
+    game.move((event.safeLane===-1?1:-1)-game.getState().lane);probe.step(2.4);
+    assert(game.getState().worldEvent?.phase==='active','portal active');
+    game.boost();probe.step(.04);
+    assert(game.getState().lane===event.safeLane,'portal teleport');
+    assert(game.getState().hits===0 && game.getState().boost<5,'boost protects and consumes meter');
   });
   check('Jump clears a barricade and grounded impact damages', () => {
     reset({ jumpHeight: 1.2 });
@@ -280,5 +339,11 @@ export function runAudit(game, probe) {
       assert(!probe.inspect().ghost, 'rival disconnect');
     },
   );
+  check('Soundtrack changes only at 15, 30 and 50; final boss and endless keep North Korea music',()=>{
+    for(const [stage,track] of [[1,0],[14,0],[15,2],[29,2],[30,3],[40,3],[49,3],[50,4],[55,4],[70,4]]) {
+      reset({distance:(stage-1)*360+1,lane:-1});probe.step();assert(probe.inspect().trackIndex===track,'music '+stage);
+    }
+    reset({mode:'endless',distance:36000,lane:-1});probe.step();assert(probe.inspect().trackIndex===4,'endless music');
+  });
   return { passed: passed.length, checks: passed };
 }

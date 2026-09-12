@@ -2,6 +2,7 @@
   const actualRender=renderer.render.bind(renderer);renderer.render=()=>{};
   (window as any).engineProbe={
     arrange(patch:any={}){
+      defeatedBosses.clear();for(const stage of [55,70])if((patch.distance??0)>=(stage*STAGE_LENGTH))defeatedBosses.add(stage);
       Object.assign(state,patch);lane=patch.lane??0;state.lane=lane;player.position.set(lane*3.65,0,0);jumpHeight=patch.jumpHeight??0;jumpVelocity=0;invuln=patch.invuln??0;lastStage=stageAt(state.distance).stage;
       nextPickup=Infinity;nextCurveAt=Infinity;nextDrunkAt=Infinity;nextSpeedAt=Infinity;nextWrongAt=Infinity;
       drunkActive=false;drunkMesh.visible=false;speedStage=0;speederMesh.visible=false;wrongActive=false;wrongwayMesh.visible=false;
@@ -10,12 +11,13 @@
       wrecks.forEach(w=>{w.active=false;w.mesh.visible=false;});hazards.forEach(h=>h.mesh.visible=false);pickups.forEach(p=>p.mesh.visible=false);
     },
     step(seconds=.04){for(let remaining=seconds;remaining>1e-8;remaining-=.04)animate(lastTime+Math.min(.04,remaining)*1000);emit();},
-    render(){actualRender(scene,camera);},
+    bossAttack(){attackBoss();},
+    render(){if(state.cleared && endingSequence)actualRender(endingSequence.scene,endingSequence.camera);else actualRender(scene,camera);},
     enableRendering(){renderer.render=actualRender;},
     car(x:number,z:number){const c=cars.find(c=>!c.mesh.visible)!;c.mesh.visible=true;c.hit=false;c.mesh.position.set(x,0,z);c.previousZ=z;return cars.indexOf(c);},
     event(kind:string,x:number,z:number){if(kind==='speed'){speedStage=2;speedPrevZ=z;speederMesh.position.set(x,0,z);speederMesh.visible=true;}if(kind==='wrong'){wrongActive=true;wrongPrevZ=z;wrongVictim=-1;wrongwayMesh.position.set(x,0,z);wrongwayMesh.visible=true;}if(kind==='drunk'){drunkActive=true;drunkPrevZ=z;drunkBaseX=x;drunkMesh.position.set(x,0,z);drunkMesh.visible=true;}},
     pickup(item:Item,x:number,z:number){const p=pickups[0];p.item=item;p.mesh.position.set(x,0,z);p.mesh.visible=true;},
     barrier(x:number,z:number){hazards[0].mesh.position.set(x,0,z);hazards[0].mesh.visible=true;},
     blast:explode,
-    inspect(){return {state:{...state,lane,jumpHeight},x:player.position.x,explosions:explosions.filter(e=>e.mesh.visible).length,colors:explosions.filter(e=>e.mesh.visible).map(e=>'#'+e.mesh.material.color.getHexString()),cars:cars.map(c=>({visible:c.mesh.visible,hit:c.hit,z:c.mesh.position.z})),speeder:speederMesh.visible,wrong:wrongwayMesh.visible,drunk:drunkMesh.visible,police:cops.filter(c=>c.visible).length,bombs:bombs.filter(b=>b.mesh.visible).length,shield,empTime,scenery:scene.getObjectByName('map-scenery')?.userData.map,sceneryMeshes:scene.getObjectByName('map-scenery')?.children.reduce((n,p)=>n+p.children.length,0),hazards:hazards.filter(h=>h.mesh.visible).length,ghost:ghost.visible};},
+    inspect(){return {trackIndex,audioPaused:bgm.paused,audioMuted:bgm.muted,audioTime:bgm.currentTime,state:{...state,lane,jumpHeight},x:player.position.x,explosions:explosions.filter(e=>e.mesh.visible).length,colors:explosions.filter(e=>e.mesh.visible).map(e=>'#'+e.mesh.material.color.getHexString()),cars:cars.map(c=>({visible:c.mesh.visible,hit:c.hit,z:c.mesh.position.z})),speeder:speederMesh.visible,wrong:wrongwayMesh.visible,drunk:drunkMesh.visible,police:cops.filter(c=>c.visible).length,bombs:bombs.filter(b=>b.mesh.visible).length,shield,empTime,scenery:scene.getObjectByName('map-scenery')?.userData.map,sceneryMeshes:scene.getObjectByName('map-scenery')?.children.reduce((n,p)=>n+p.children.length,0),hazards:hazards.filter(h=>h.mesh.visible).length,ghost:ghost.visible};},
   };

@@ -1,4 +1,6 @@
+import type { RunMode } from './stages';
 import { GameCloud } from './vendor/game-cloud.js';
+export { watchGameCloudAuth } from './vendor/game-cloud.js';
 /** ZUKU content-scoped Game Cloud runtime, including an opaque iframe bridge. */
 export const CLOUD_API = 'https://zuzunza.com/api/v1';
 export const DEFAULT_PROJECT = 'cnt_ce447b3687804379845bc5bf77c10a14'; // JUMP content ID, filled during provisioning.
@@ -16,6 +18,7 @@ export type Peer = {
   elapsed: number;
   cleared: boolean;
   round: number | null;
+  mode?: RunMode;
 };
 export type Room = {
   roomId: string;
@@ -32,26 +35,26 @@ export type Room = {
   }[];
 };
 export class Cloud {
+  private sdk: GameCloud;
   constructor(
     public contentId: string,
     private token = '',
-  ) {}
+  ) {
+    this.sdk = new GameCloud({ contentId, getToken: () => this.token });
+  }
   async call<T>(
     action: string,
     payload: Record<string, unknown> = {},
   ): Promise<T> {
-    return new GameCloud({
-      contentId: this.contentId,
-      getToken: () => this.token,
-    }).call(action, payload) as Promise<T>;
+    return this.sdk.call(action, payload) as Promise<T>;
   }
-  context() {
+  context(interactive = true) {
     return this.call<{
       projectId: string;
       player: { id: string; name: string };
-    }>('context');
+    }>('context', { interactive });
   }
-  async scores(offset = 0) {
+  async scores(offset = 0, mode: RunMode = 'story') {
     const data = await this.call<{
       entries: {
         id: string;
@@ -60,7 +63,11 @@ export class Cloud {
         metadata: { stage?: number };
       }[];
       nextOffset: number | null;
-    }>('scores-list', { board: 'closed-run-v2', offset });
+    }>('scores-list', {
+      board:
+        mode === 'endless' ? 'closed-run-endless-v4' : 'closed-run-story-v4',
+      offset,
+    });
     return {
       rows: data.entries.map((r) => ({
         id: r.id,
@@ -71,20 +78,21 @@ export class Cloud {
       nextOffset: data.nextOffset,
     };
   }
-  submit(score: Score) {
+  submit(score: Score, mode: RunMode = 'story') {
     return this.call('scores-submit', {
-      board: 'closed-run-v2',
+      board:
+        mode === 'endless' ? 'closed-run-endless-v4' : 'closed-run-story-v4',
       score: score.distance,
       metadata: { stage: score.stage },
     });
   }
-  save(data: unknown) {
-    return this.call('save', { slot: 'closed-run-v2', data });
+  save(data: unknown, mode: RunMode = 'story') {
+    return this.call('save', { slot: 'closed-run-v4-' + mode, data });
   }
-  load() {
+  load(mode: RunMode = 'story') {
     return this.call<{ data: { best?: number } | null; version: number }>(
       'load',
-      { slot: 'closed-run-v2' },
+      { slot: 'closed-run-v4-' + mode },
     );
   }
 }
@@ -93,7 +101,7 @@ export function parsePeer(p: unknown): Peer | null {
   const v = p as Peer;
   return Number.isFinite(v.distance) &&
     v.distance >= 0 &&
-    v.distance <= 36000 &&
+    v.distance <= 1000000000 &&
     [-1, 0, 1].includes(v.lane) &&
     ['ready', 'running', 'paused', 'capture', 'over'].includes(v.phase) &&
     Number.isFinite(v.elapsed) &&

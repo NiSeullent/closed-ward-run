@@ -1,8 +1,19 @@
+import { createWorldEvents, type WorldEventState } from './world-events';
+import { createWorldEventVisual } from './world-event-visual';
+import { soundtrackForStage, SOUNDTRACK_NAMES } from './soundtrack';
+import { createBossEncounter, bossAt, type BossState } from './boss';
 import { createRoadScenery } from './road-scenery';
+import {
+  createEndingSequence,
+  ENDING_DURATION,
+  type EndingBeat,
+} from './ending';
 import {
   stageAt,
   STAGE_LENGTH,
   MAX_STAGE,
+  CLEAR_DISTANCE,
+  type RunMode,
   forkChoice,
   dashDestination,
   blastHits,
@@ -48,6 +59,10 @@ export type GameSnapshot = {
   police: number;
   route: Route;
   cleared: boolean;
+  ending?: EndingBeat;
+  mode: RunMode;
+  boss: BossState | null;
+  worldEvent: WorldEventState | null;
   phase: Phase;
   hits: number;
   speed: number;
@@ -78,6 +93,9 @@ export type GameAPI = {
   mute: (value: boolean) => void;
   dispose: () => void;
   getState: () => GameSnapshot;
+  skipEnding: () => void;
+  continueEndless: () => void;
+  attack: () => void;
 };
 const mix = THREE.MathUtils.lerp,
   clamp = THREE.MathUtils.clamp;
@@ -102,7 +120,16 @@ export function createGame(
   renderer.toneMappingExposure = 1.25;
   host.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
+  let endingSequence: ReturnType<typeof createEndingSequence> | null = null;
+  let endingTime = 0;
   const roadScenery = createRoadScenery(scene);
+  const bossEncounter = createBossEncounter(scene);
+  const defeatedBosses = new Set<number>();
+  const worldEvents = createWorldEvents();
+  const worldVisual = createWorldEventVisual();
+  scene.add(worldVisual.root);
+  worldVisual.update(null);
+  let worldSpeedMultiplier = 1, worldJumpMultiplier = 1;
   roadScenery.enter(stageAt(0).map);
   scene.background = new THREE.Color('#20152f');
   scene.fog = new THREE.FogExp2('#291934', 0.015);
@@ -595,7 +622,7 @@ export function createGame(
     zoneCtx.fillStyle = '#b8e6d9';
     zoneCtx.textAlign = 'center';
     zoneCtx.textBaseline = 'middle';
-    zoneCtx.font = 'bold 44px "Malgun Gothic",sans-serif';
+    zoneCtx.font = 'bold 44px Pretendard, sans-serif';
     zoneCtx.fillText(text, 256, 67, 470);
     zoneTex.needsUpdate = true;
   }
@@ -1002,6 +1029,9 @@ export function createGame(
     police: 0,
     route: 'left',
     cleared: false,
+    mode: 'story',
+    boss: null,
+    worldEvent: null,
     phase: 'ready',
     hits: 0,
     speed: 22,
@@ -1021,7 +1051,7 @@ export function createGame(
     mapItems: [],
   };
   try {
-    state.best = Number(localStorage.getItem('closed-run-best')) || 0;
+    state.best = Number(localStorage.getItem('closed-run-v4-story-best')) || 0;
   } catch {}
   let lane = 0,
     invuln = 0,
@@ -1066,16 +1096,20 @@ export function createGame(
     zoneGround = new THREE.Color(zoneForDistance(0).spec.ground),
     zoneLampA = new THREE.Color(zoneForDistance(0).spec.lampA),
     zoneLampB = new THREE.Color(zoneForDistance(0).spec.lampB);
-  // Rotating soundtrack: every mp3 in public/audio plays in order, then loops.
+  // Phase soundtrack; level changes within a phase preserve playback position.
   const embeddedTracks =
     typeof __ZWF_AUDIO_SONG1__ === 'string'
-      ? [__ZWF_AUDIO_SONG1__, __ZWF_AUDIO_CLOSED_RUN__!]
+      ? [
+          __ZWF_AUDIO_SONG1__,
+          __ZWF_AUDIO_CLOSED_RUN__!,
+          __ZWF_AUDIO_P2__!,
+          __ZWF_AUDIO_P3__!,
+          __ZWF_AUDIO_BOSSFINAL__!,
+        ]
       : null;
   const TRACK_URLS =
     embeddedTracks ??
-    ['audio/song1.mp3', 'audio/closed-run-bgm.mp3'].map(
-      (p) => new URL(p, document.baseURI).href,
-    );
+    SOUNDTRACK_NAMES.map((p) => new URL('audio/' + p, document.baseURI).href);
   let trackIndex = 0;
   const bgm = new Audio(TRACK_URLS[0]);
   bgm.preload = 'auto';
@@ -1095,7 +1129,8 @@ export function createGame(
     playBgm();
   };
   const nextTrack = () => {
-    if (!disposed) playTrack(trackIndex + 1, bgm.volume);
+    if (!disposed && state.phase !== 'paused' && state.phase !== 'over')
+      playTrack(soundtrackForStage(state.stage), bgm.volume);
   };
   bgm.addEventListener('ended', nextTrack);
   let audio: AudioContext | null = null,
@@ -1194,7 +1229,19 @@ export function createGame(
       mapItems,
     });
   };
+  function readBest(mode: RunMode) {
+    try {
+      const value = Number(localStorage.getItem('closed-run-v4-' + mode + '-best'));
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    } catch { return 0; }
+  }
   function start(seed?: number) {
+    endingTime = 0;
+    bossEncounter.reset();
+    worldEvents.reset();
+    worldVisual.update(null);
+    worldSpeedMultiplier = worldJumpMultiplier = 1;
+    defeatedBosses.clear();
     randomState = (seed ?? Math.floor(random() * 2147483647)) >>> 0;
     dashTime = 0;
     empTime = 0;
@@ -1206,8 +1253,8 @@ export function createGame(
     for (const p of pickups) p.mesh.visible = false;
     for (const h of hazards) h.mesh.visible = false;
     initAudio();
-    bgm.volume = 0.42;
-    playBgm();
+    bgm.currentTime = 0;
+    playTrack(0, 0.42);
     state = {
       ...state,
       stage: 1,
@@ -1218,6 +1265,11 @@ export function createGame(
       police: 0,
       route: 'left',
       cleared: false,
+      mode: 'story',
+      best: readBest('story'),
+      boss: null,
+    worldEvent: null,
+      ending: undefined,
       phase: 'running',
       hits: 0,
       speed: 22,
@@ -1321,7 +1373,7 @@ export function createGame(
   }
   function jump() {
     if (state.phase !== 'running' || jumpHeight > 0) return;
-    jumpVelocity = 8.2;
+    jumpVelocity = 8.2 * worldJumpMultiplier;
     beep(540, 0.08);
   }
   function hit() {
@@ -1355,7 +1407,7 @@ export function createGame(
       captureTime = 0;
       state.best = Math.max(state.best, state.distance);
       try {
-        localStorage.setItem('closed-run-best', String(Math.floor(state.best)));
+        localStorage.setItem('closed-run-v4-' + state.mode + '-best', String(Math.floor(state.best)));
       } catch {}
     }
     emit();
@@ -1375,7 +1427,7 @@ export function createGame(
     state.best = Math.max(state.best, state.distance);
     beep(75, 0.8);
     try {
-      localStorage.setItem('closed-run-best', String(Math.floor(state.best)));
+      localStorage.setItem('closed-run-v4-' + state.mode + '-best', String(Math.floor(state.best)));
     } catch {}
     emit();
   }
@@ -1458,7 +1510,22 @@ export function createGame(
     state.boost = 0;
     dashTime = 1.1;
     state.boosting = true;
-    state.distance = dashDestination(state.distance);
+    if (state.boss && !state.boss.defeated) {
+      attackBoss(4);
+      invuln = Math.max(invuln, 1.1);
+      emit();
+      return;
+    }
+    if (state.worldEvent?.kinds.includes('portal')) {
+      lane = state.worldEvent.safeLane;
+      player.position.x = lane * 3.65;
+      invuln = Math.max(invuln, 1.1);
+      state.flash = '순간이동! 안전 차선으로 돌진';
+      flashTime = 1.5;
+      emit();
+      return;
+    }
+    state.distance = dashDestination(state.distance, state.mode);
     state.best = Math.max(state.best, state.distance);
     state.flash = '돌진! 다음 스테이지로 돌파';
     flashTime = 2;
@@ -1508,6 +1575,12 @@ export function createGame(
       for (const h of hazards)
         if (h.mesh.position.z > -22) h.mesh.visible = false;
     }
+    if (
+      state.boss &&
+      !state.boss.defeated &&
+      ['destroy', 'throw', 'emp'].includes(item)
+    )
+      attackBoss(item === 'emp' ? 5 : 4);
     if (item === 'throw') {
       const bomb = bombs.find((b) => !b.mesh.visible);
       if (bomb) {
@@ -1515,6 +1588,39 @@ export function createGame(
         bomb.mesh.visible = true;
       }
     }
+    emit();
+  }
+  function attackBoss(power = 1) {
+    if (state.phase !== 'running' || !state.boss || state.boss.defeated) return;
+    const landed = bossEncounter.attack(lane, power);
+    state.boss = bossEncounter.snapshot();
+    if (landed) {
+      beep(850, 0.08);
+      state.flash = '명중!';
+      flashTime = 0.4;
+    }
+    if (state.boss?.defeated) {
+      defeatedBosses.add(state.stage);
+      state.flash = state.boss.name + ' 격파! 다음 구간으로';
+      flashTime = 3;
+      state.boost = 100;
+      invuln = 2;
+      ambulance.visible = true;
+      nextCurveAt = state.elapsed + 30;
+    }
+    emit();
+  }
+  function continueEndless() {
+    if (!state.cleared || state.mode !== 'story' || state.ending !== 'done') return;
+    start();
+    state.mode = 'endless';
+    state.best = readBest('endless');
+    state.distance = CLEAR_DISTANCE;
+    state.best = Math.max(state.best, CLEAR_DISTANCE);
+    state.stage = MAX_STAGE + 1;
+    lastStage = MAX_STAGE + 1;
+    state.flash = '무한모드 · 끝없이 달려라!';
+    flashTime = 3;
     emit();
   }
   function tickMechanics(dt: number) {
@@ -1535,17 +1641,25 @@ export function createGame(
       }
       lastStage = state.stage;
     }
-    const info = stageAt(state.distance, state.route);
+    const info = stageAt(state.distance, state.route, state.mode);
     state.police = empTime > 0 ? 0 : Math.min(8, state.hits * info.map.police);
     if (info.complete && state.phase === 'running') {
-      state.distance = MAX_STAGE * STAGE_LENGTH;
+      state.distance = CLEAR_DISTANCE;
       state.phase = 'over';
       state.cleared = true;
+      state.ending = 'hospital';
+      state.zone = '정신병원 · 퇴원 수속';
+      state.boosting = false;
+      endingTime = 0;
+      endingSequence ??= createEndingSequence();
+      endingSequence.update(0, camera.aspect);
       state.progress = 1;
       state.speed = 0;
       bgm.pause();
+      if (audio && sirenGain)
+        sirenGain.gain.setTargetAtTime(0, audio.currentTime, 0.05);
       try {
-        localStorage.setItem('closed-run-best', String(state.distance));
+        localStorage.setItem('closed-run-v4-' + state.mode + '-best', String(state.distance));
       } catch {}
       emit();
       return;
@@ -1569,7 +1683,10 @@ export function createGame(
         const tag = label(p.mesh, ITEM_LABELS[p.item], 0, 2, 0, 2.8, 0.65);
         tag.userData.itemLabel = true;
       }
-      if (info.map.hazard !== 'traffic') {
+      if (
+        info.map.hazard !== 'traffic' &&
+        (!state.boss || state.boss.defeated) && !state.worldEvent
+      ) {
         const h = hazards.find((h) => !h.mesh.visible);
         if (h) {
           h.mesh.position.set((Math.floor(random() * 3) - 1) * 3.65, 0, -85);
@@ -1659,28 +1776,113 @@ export function createGame(
     raf = requestAnimationFrame(animate);
     const dt = Math.min((now - lastTime) / 1000, 0.04);
     lastTime = now;
+    if (state.cleared && endingSequence) {
+      endingTime = Math.min(ENDING_DURATION, endingTime + dt);
+      const beat = endingSequence.update(endingTime, camera.aspect);
+      if (state.ending !== beat) {
+        state.ending = beat;
+        emit();
+      }
+      renderer.render(endingSequence.scene, endingSequence.camera);
+      return;
+    }
     const running = state.phase === 'running',
       capturing = state.phase === 'capture';
     if (state.phase !== 'paused') clock += dt;
     if (running) {
       state.elapsed += dt;
+      const trigger =
+        state.mode === 'story'
+          ? [55, 70].find(
+              (stage) =>
+                !defeatedBosses.has(stage) &&
+                state.distance >= (stage - 1) * STAGE_LENGTH,
+            )
+          : undefined;
+      if (trigger && (!state.boss || state.boss.defeated)) {
+        state.distance = (trigger - 1) * STAGE_LENGTH;
+        state.stage = trigger;
+        state.boss = bossEncounter.start(bossAt(trigger)!);
+        state.flash = state.boss.name + ' 등장 · 같은 차선에서 F로 반격!';
+        flashTime = 4;
+        invuln = 2;
+        dashTime = 0;
+        lastStage = trigger;
+        lane = -1;
+        cars.forEach((car) => (car.mesh.visible = false));
+        hazards.forEach((h) => (h.mesh.visible = false));
+        cops.forEach((c) => (c.visible = false));
+        taserActive = false;
+        taser.visible = false;
+        taserPolice.visible = false;
+        helicopterActive = false;
+        helicopter.visible = false;
+        drunkActive = false;
+        drunkMesh.visible = false;
+        speedStage = 0;
+        speederMesh.visible = false;
+        wrongActive = false;
+        wrongwayMesh.visible = false;
+        wrecks.forEach((w) => {
+          w.active = false;
+          w.mesh.visible = false;
+        });
+        curveDir = 0;
+        chevrons.visible = false;
+        gate.visible = false;
+        ambulance.visible = false;
+      }
+      if (state.boss && !state.boss.defeated) {
+        bossEncounter.tick(dt, lane, jumpHeight, () => hit());
+        state.boss = bossEncounter.snapshot();
+      }
       state.distance = Math.min(
-        MAX_STAGE * STAGE_LENGTH,
-        state.distance + state.speed * dt,
+        state.mode === 'endless' ? Number.MAX_SAFE_INTEGER : CLEAR_DISTANCE,
+        state.distance +
+          (state.boss && !state.boss.defeated ? 0 : state.speed * dt),
       );
       roadScenery.tick(state.speed * dt);
       state.best = Math.max(state.best, state.distance);
-      state.stage = stageAt(state.distance, state.route).stage;
+      state.stage = stageAt(state.distance, state.route, state.mode).stage;
+      // Carry an event's safe-center promise through the next fork.
+      if (state.stage !== lastStage && lane === 0 && state.worldEvent?.safeLane === 0) {
+        lane = -1;
+        player.position.x = lane * 3.65;
+      }
+      const world = worldEvents.update({ dt, stage: state.stage, distance: state.distance,
+        lane, jumpHeight, boosting: dashTime > 0, suspended: !!state.boss && !state.boss.defeated });
+      state.worldEvent = world.state;
+      worldVisual.update(world.state, dt);
+      worldSpeedMultiplier = world.speedMultiplier;
+      worldJumpMultiplier = world.jumpMultiplier;
+      if (world.teleportLane !== null) { lane = world.teleportLane; player.position.x = lane * 3.65; }
+      state.boost = Math.min(100, state.boost + world.bonusBoost);
+      if (world.state) {
+        // The marked safe lane is a promise: unrelated traffic cannot hit it.
+        cars.forEach(c => { c.mesh.visible = false; c.mesh.position.z = -85; });
+        hazards.forEach(h => h.mesh.visible = false);
+        cops.forEach(c => c.visible = false);
+        wrecks.forEach(w => { w.active = false; w.mesh.visible = false; });
+        taserActive = false; taser.visible = false; taserPolice.visible = false;
+        helicopterActive = false; helicopter.visible = false;
+        drunkActive = false; drunkMesh.visible = false;
+        speedStage = 0; speederMesh.visible = false;
+        wrongActive = false; wrongwayMesh.visible = false;
+        curveDir = 0; chevrons.visible = false;
+        nextCurveAt = state.elapsed + 15;
+        if (world.damage) { hit(); state.flash = world.state.title + ' · 충돌'; flashTime = 1; }
+      }
       tickMechanics(dt);
       if (state.cleared) {
-        renderer.render(scene, camera);
+        if (endingSequence)
+          renderer.render(endingSequence.scene, endingSequence.camera);
         return;
       }
-      const stageInfo = stageAt(state.distance, state.route);
+      const stageInfo = stageAt(state.distance, state.route, state.mode);
       const base = zoneForDistance(stageInfo.map.look * ZONE_LENGTH_METERS);
       const zf = {
         ...base,
-        loop: Math.floor((stageInfo.stage - 1) / 10),
+        loop: 0,
         spec: {
           ...base.spec,
           lampA: stageInfo.map.color,
@@ -1694,36 +1896,62 @@ export function createGame(
       state.progress = stageInfo.progress;
       if (state.stage !== zoneIndex) {
         zoneIndex = state.stage;
+        const song = soundtrackForStage(state.stage);
+        if (song !== trackIndex) playTrack(song, 0.42);
         state.zone = zf.spec.name;
         if (!state.flash.includes('분기 중앙')) state.flash = zf.spec.banner;
         flashTime = 2.4;
         drawZoneSign('↑ ' + zf.spec.name + '     출구 없음');
-        startCityFade(zf.index);
+        if ('scenery' in stageInfo.map) {
+          cityGroups.forEach(group => group.visible = false);
+          fadeFrom = null;
+          cityFadeT = -1;
+        } else {
+          cityGroup.visible = true;
+          startCityFade(zf.index);
+        }
         roadScenery.enter(stageInfo.map);
         zoneFog.set(zf.spec.fog);
         zoneSky.set(zf.spec.sky);
         zoneGround.set(zf.spec.ground);
+        if ('scenery' in stageInfo.map) {
+          const terrain = stageInfo.map.scenery;
+          const snow = ['russia', 'alpine', 'salt'].includes(terrain);
+          const arid = ['pyramid', 'nile', 'somalia', 'bazaar'].includes(terrain);
+          zoneGround.set(snow ? '#c3d4d6' : arid ? '#b9a278' : '#708b70');
+          zoneSky.set(snow ? '#8eaab8' : arid ? '#b5b9b5' : '#637c9a');
+          zoneFog.copy(zoneSky);
+        }
         zoneLampA.set(zf.spec.lampA);
         zoneLampB.set(zf.spec.lampB);
         beep(520, 0.15);
       }
       const remaining = STAGE_LENGTH - (state.distance % STAGE_LENGTH),
-        nextSpec = stageAt(state.distance + remaining, state.route).map;
-      if (remaining <= GATE_LEAD_METERS) {
+        nextSpec = stageAt(
+          state.distance + remaining,
+          state.route,
+          state.mode,
+        ).map;
+      if (
+        remaining <= GATE_LEAD_METERS &&
+        (!state.boss || state.boss.defeated) && !state.worldEvent
+      ) {
         gate.visible = true;
         gate.position.z = -remaining;
         if (gateZone !== nextSpec.name) {
           gateZone = nextSpec.name;
           drawGateSign(
-            state.stage === MAX_STAGE
+            state.mode === 'story' && state.stage === MAX_STAGE
               ? '최종 탈출구'
               : '← ' +
-                  stageAt(state.distance + remaining, 'left').map.name +
+                  stageAt(state.distance + remaining, 'left', state.mode).map
+                    .name +
                   ' | ' +
-                  stageAt(state.distance + remaining, 'right').map.name +
+                  stageAt(state.distance + remaining, 'right', state.mode).map
+                    .name +
                   ' →',
-            state.stage === MAX_STAGE
-              ? '100 STAGES · 앞으로 돌파!'
+            state.mode === 'story' && state.stage === MAX_STAGE
+              ? '400 STAGES · 마지막 구간을 돌파하라!'
               : '가운데로 가면 충돌 후 왼쪽 진입',
           );
         }
@@ -1752,7 +1980,11 @@ export function createGame(
           cityFadeT = -1;
         }
       }
-      if (curveDir === 0 && state.elapsed >= nextCurveAt) {
+      if (
+        (!state.boss || state.boss.defeated) && !state.worldEvent &&
+        curveDir === 0 &&
+        state.elapsed >= nextCurveAt
+      ) {
         curveDir = random() < 0.5 ? -1 : 1;
         curveT = 0;
         state.flash =
@@ -1788,10 +2020,10 @@ export function createGame(
         }
       state.speed = mix(
         state.speed,
-        (speedForDistance(state.distance, state.hits) +
+        (speedForDistance(Math.min(state.distance, STAGE_LENGTH * 2), state.hits) +
           zf.spec.speedBonus +
           stageInfo.difficulty * 2) *
-          (dashTime > 0 ? 2.8 : 1),
+          (dashTime > 0 ? 2.8 : 1) * worldSpeedMultiplier,
         1 - Math.exp(-dt * 4),
       );
       invuln = Math.max(0, invuln - dt);
@@ -1819,402 +2051,404 @@ export function createGame(
         clock * Math.min(1.15, 0.6 + (0.4 * state.speed) / 22),
         jumpHeight > 0.03 ? 0.35 : 1,
       );
-      for (const c of cars) {
-        c.previousZ = c.mesh.position.z;
-        // Same-direction traffic: every car faces -Z like the player and the
-        // relative speed stays BELOW the road scroll, so cars read as slower
-        // cars ahead being overtaken instead of oncoming/reversing traffic.
-        c.mesh.position.z +=
-          Math.max(6, state.speed - 11 + zf.spec.carBoost + ck * 2) * dt;
-        const wheels = c.mesh.userData.wheels as THREE.Mesh[] | undefined;
-        if (wheels) for (const w of wheels) w.rotation.x += dt * 9;
-        if (
-          c.mesh.visible &&
-          !c.hit &&
-          collides(
-            player.position.x,
-            c.mesh.position.x,
-            c.previousZ,
-            c.mesh.position.z,
-          )
-        ) {
-          c.hit = true;
-          c.mesh.visible = false;
-          explode(c.mesh.position.x, c.mesh.position.z);
-          hit();
-          if (state.phase === 'capture') break;
-        }
-        if (c.mesh.position.z > 22) {
-          const minZ = Math.min(...cars.map((v) => v.mesh.position.z));
-          const zgMin = Math.max(10, zf.spec.gapMin - zf.loop * 1.5);
-          c.mesh.position.z =
-            minZ -
-            (zgMin + random() * (zf.spec.gapMax - zgMin)) *
-              (curveDir !== 0 ? 0.8 : 1);
-          c.mesh.position.x = (Math.floor(random() * 3) - 1) * 3.65;
-          c.hit = false;
-          c.mesh.visible = true;
+      if ((!state.boss || state.boss.defeated) && !state.worldEvent) {
+        for (const c of cars) {
           c.previousZ = c.mesh.position.z;
-        }
-      }
-      if (
-        empTime <= 0 &&
-        shouldActivateTaser(state.elapsed, state.hits) &&
-        !taserActive &&
-        state.elapsed - taserTimer >= TASER_INTERVAL_SECONDS
-      ) {
-        taserActive = true;
-        taserTimer = state.elapsed;
-        taserLane = Math.floor(random() * 3) - 1;
-        taser.position.set(taserLane * 3.65, 1.05, -30);
-        taserPreviousZ = taser.position.z;
-        taserPolice.position.set(taserLane * 3.65, 0, -30);
-        taserPolice.rotation.set(0, Math.PI, 0);
-        taser.visible = true;
-        taserPolice.visible = true;
-        beep(880, 0.12);
-      }
-      // Drunk driver: unlocked after a full zone loop, weaves across 2 lanes, then crashes.
-      if (
-        !drunkActive &&
-        eventsUnlocked(state.distance) &&
-        state.elapsed >= nextDrunkAt
-      ) {
-        drunkActive = true;
-        drunkT = 0;
-        drunkBaseX = (Math.floor(random() * 3) - 1) * 3.65;
-        drunkPrevZ = -75;
-        drunkMesh.position.set(drunkBaseX, 0, -75);
-        drunkMesh.visible = true;
-        state.flash = '음주운전 차량 발견!';
-        flashTime = 1.6;
-        beep(700, 0.2);
-      }
-      if (drunkActive) {
-        drunkT += dt;
-        drunkPrevZ = drunkMesh.position.z;
-        drunkMesh.position.z += Math.max(5, state.speed - 14) * dt;
-        drunkMesh.position.x = clamp(
-          drunkBaseX + Math.sin(drunkT * 1.7) * 4.4,
-          -5.5,
-          5.5,
-        );
-        (drunkMesh.userData.beacon as THREE.Mesh).visible =
-          Math.floor(clock * 7) % 2 === 0;
-        const drunkHit =
-          Math.abs(player.position.x - drunkMesh.position.x) < 3.2 &&
-          Math.max(drunkPrevZ, drunkMesh.position.z) > -2.6 &&
-          Math.min(drunkPrevZ, drunkMesh.position.z) < 1.8;
-        if (drunkHit || drunkT >= 6.5) {
-          spawnWreck(drunkMesh.position.x, drunkMesh.position.z);
-          drunkActive = false;
-          drunkMesh.visible = false;
-          state.flash = '음주운전 차량 사고!';
-          flashTime = 1.8;
-          shake = 0.6;
-          beep(95, 0.5);
-          nextDrunkAt = state.elapsed + 45 + random() * 30;
-          if (drunkHit) hit();
-        }
-      }
-      // Speeder: warned, then overtakes the player's lane from behind.
-      if (speedStage === 0 && state.elapsed >= nextSpeedAt) {
-        speedStage = 1;
-        speedT = 0;
-        state.flash = '과속 차량 접근!';
-        flashTime = 1.6;
-        beep(880, 0.15);
-      } else if (speedStage === 1) {
-        speedT += dt;
-        if (speedT >= 1.2) {
-          speedStage = 2;
-          speedLane = clamp(Math.round(player.position.x / 3.65), -1, 1);
-          speederMesh.position.set(speedLane * 3.65, 0, 24);
-          speedPrevZ = 24;
-          speederMesh.visible = true;
-          beep(440, 0.3);
-        }
-      } else if (speedStage === 2) {
-        speedPrevZ = speederMesh.position.z;
-        speederMesh.position.z -= 34 * dt;
-        if (
-          collides(
-            player.position.x,
-            speederMesh.position.x,
-            speedPrevZ,
-            speederMesh.position.z,
-          )
-        ) {
-          hit();
-          spawnWreck(speederMesh.position.x, speederMesh.position.z);
-          speedStage = 0;
-          speederMesh.visible = false;
-          nextSpeedAt = state.elapsed + 40 + random() * 30;
-          state.flash = '과속 차량 추돌 · 폭발!';
-          flashTime = 1.2;
-        }
-        if (speedPrevZ > 2 && speederMesh.position.z <= 2) {
-          shake = Math.max(shake, 0.35);
-          beep(150, 0.35);
-        }
-        if (speederMesh.position.z < -78) {
-          speedStage = 0;
-          speederMesh.visible = false;
-          nextSpeedAt = state.elapsed + 40 + random() * 30;
-        }
-      }
-      // Wrong-way car: rushes at the player, then head-on crashes into the car ahead in its lane.
-      if (!wrongActive && state.elapsed >= nextWrongAt) {
-        let vi = -1,
-          vz = -1e9;
-        cars.forEach((c, i) => {
+          // Same-direction traffic: every car faces -Z like the player and the
+          // relative speed stays BELOW the road scroll, so cars read as slower
+          // cars ahead being overtaken instead of oncoming/reversing traffic.
+          c.mesh.position.z +=
+            Math.max(6, state.speed - 11 + zf.spec.carBoost + ck * 2) * dt;
+          const wheels = c.mesh.userData.wheels as THREE.Mesh[] | undefined;
+          if (wheels) for (const w of wheels) w.rotation.x += dt * 9;
           if (
             c.mesh.visible &&
             !c.hit &&
-            c.mesh.position.z < -15 &&
-            c.mesh.position.z > vz
+            collides(
+              player.position.x,
+              c.mesh.position.x,
+              c.previousZ,
+              c.mesh.position.z,
+            )
           ) {
-            vz = c.mesh.position.z;
-            vi = i;
+            c.hit = true;
+            c.mesh.visible = false;
+            explode(c.mesh.position.x, c.mesh.position.z);
+            hit();
+            if (state.phase === 'capture') break;
           }
-        });
-        if (vi < 0) nextWrongAt = state.elapsed + 10;
-        else {
-          wrongActive = true;
-          wrongT = 0;
-          wrongVictim = vi;
-          wrongwayMesh.position.set(cars[vi].mesh.position.x, 0, -78);
-          wrongPrevZ = -78;
-          wrongwayMesh.visible = true;
-          state.flash = '역주행 차량 발생!';
-          flashTime = 2;
-          beep(300, 0.5);
-        }
-      } else if (wrongActive) {
-        wrongT += dt;
-        wrongPrevZ = wrongwayMesh.position.z;
-        wrongwayMesh.position.z += (state.speed + 16) * dt;
-        const vc = cars[wrongVictim];
-        if (
-          collides(
-            player.position.x,
-            wrongwayMesh.position.x,
-            wrongPrevZ,
-            wrongwayMesh.position.z,
-          )
-        ) {
-          hit();
-          spawnWreck(wrongwayMesh.position.x, wrongwayMesh.position.z);
-          wrongActive = false;
-          wrongwayMesh.visible = false;
-          nextWrongAt = state.elapsed + 50 + random() * 40;
-          state.flash = '역주행 차량 추돌 · 폭발!';
-          flashTime = 1.4;
+          if (c.mesh.position.z > 22) {
+            const minZ = Math.min(...cars.map((v) => v.mesh.position.z));
+            const zgMin = Math.max(10, zf.spec.gapMin - zf.loop * 1.5);
+            c.mesh.position.z =
+              minZ -
+              (zgMin + random() * (zf.spec.gapMax - zgMin)) *
+                (curveDir !== 0 ? 0.8 : 1);
+            c.mesh.position.x = (Math.floor(random() * 3) - 1) * 3.65;
+            c.hit = false;
+            c.mesh.visible = true;
+            c.previousZ = c.mesh.position.z;
+          }
         }
         if (
-          wrongActive &&
-          vc &&
-          vc.mesh.visible &&
-          wrongwayMesh.position.z >= vc.mesh.position.z - 2.5
+          empTime <= 0 &&
+          shouldActivateTaser(state.elapsed, state.hits) &&
+          !taserActive &&
+          state.elapsed - taserTimer >= TASER_INTERVAL_SECONDS
         ) {
-          vc.hit = true;
-          vc.mesh.visible = false;
-          spawnWreck(vc.mesh.position.x, vc.mesh.position.z);
-          spawnWreck(wrongwayMesh.position.x, wrongwayMesh.position.z);
-          wrongActive = false;
-          wrongwayMesh.visible = false;
-          state.flash = '역주행 차량 정면충돌!';
-          flashTime = 2;
-          shake = 0.8;
-          beep(90, 0.6);
-          nextWrongAt = state.elapsed + 50 + random() * 40;
-        } else if (wrongT > 7 || wrongwayMesh.position.z > 12) {
-          wrongActive = false;
-          wrongwayMesh.visible = false;
-          if (wrongT > 7) {
-            spawnWreck(
-              wrongwayMesh.position.x,
-              Math.min(wrongwayMesh.position.z, 10),
-            );
-            state.flash = '역주행 차량 단독사고!';
-            flashTime = 1.6;
-            shake = 0.5;
-          }
-          nextWrongAt = state.elapsed + 50 + random() * 40;
+          taserActive = true;
+          taserTimer = state.elapsed;
+          taserLane = Math.floor(random() * 3) - 1;
+          taser.position.set(taserLane * 3.65, 1.05, -30);
+          taserPreviousZ = taser.position.z;
+          taserPolice.position.set(taserLane * 3.65, 0, -30);
+          taserPolice.rotation.set(0, Math.PI, 0);
+          taser.visible = true;
+          taserPolice.visible = true;
+          beep(880, 0.12);
         }
-      }
-      for (const event of [
-        {
-          mesh: speederMesh,
-          previous: speedPrevZ,
-          active: speedStage === 2,
-          stop: () => {
-            speedStage = 0;
-            nextSpeedAt = state.elapsed + 45;
-          },
-        },
-        {
-          mesh: drunkMesh,
-          previous: drunkPrevZ,
-          active: drunkActive,
-          stop: () => {
+        // Drunk driver: unlocked after a full zone loop, weaves across 2 lanes, then crashes.
+        if (
+          !drunkActive &&
+          eventsUnlocked(state.distance) &&
+          state.elapsed >= nextDrunkAt
+        ) {
+          drunkActive = true;
+          drunkT = 0;
+          drunkBaseX = (Math.floor(random() * 3) - 1) * 3.65;
+          drunkPrevZ = -75;
+          drunkMesh.position.set(drunkBaseX, 0, -75);
+          drunkMesh.visible = true;
+          state.flash = '음주운전 차량 발견!';
+          flashTime = 1.6;
+          beep(700, 0.2);
+        }
+        if (drunkActive) {
+          drunkT += dt;
+          drunkPrevZ = drunkMesh.position.z;
+          drunkMesh.position.z += Math.max(5, state.speed - 14) * dt;
+          drunkMesh.position.x = clamp(
+            drunkBaseX + Math.sin(drunkT * 1.7) * 4.4,
+            -5.5,
+            5.5,
+          );
+          (drunkMesh.userData.beacon as THREE.Mesh).visible =
+            Math.floor(clock * 7) % 2 === 0;
+          const drunkHit =
+            Math.abs(player.position.x - drunkMesh.position.x) < 3.2 &&
+            Math.max(drunkPrevZ, drunkMesh.position.z) > -2.6 &&
+            Math.min(drunkPrevZ, drunkMesh.position.z) < 1.8;
+          if (drunkHit || drunkT >= 6.5) {
+            spawnWreck(drunkMesh.position.x, drunkMesh.position.z);
             drunkActive = false;
-            nextDrunkAt = state.elapsed + 45;
-          },
-        },
-        {
-          mesh: wrongwayMesh,
-          previous: wrongPrevZ,
-          active: wrongActive,
-          stop: () => {
+            drunkMesh.visible = false;
+            state.flash = '음주운전 차량 사고!';
+            flashTime = 1.8;
+            shake = 0.6;
+            beep(95, 0.5);
+            nextDrunkAt = state.elapsed + 45 + random() * 30;
+            if (drunkHit) hit();
+          }
+        }
+        // Speeder: warned, then overtakes the player's lane from behind.
+        if (speedStage === 0 && state.elapsed >= nextSpeedAt) {
+          speedStage = 1;
+          speedT = 0;
+          state.flash = '과속 차량 접근!';
+          flashTime = 1.6;
+          beep(880, 0.15);
+        } else if (speedStage === 1) {
+          speedT += dt;
+          if (speedT >= 1.2) {
+            speedStage = 2;
+            speedLane = clamp(Math.round(player.position.x / 3.65), -1, 1);
+            speederMesh.position.set(speedLane * 3.65, 0, 24);
+            speedPrevZ = 24;
+            speederMesh.visible = true;
+            beep(440, 0.3);
+          }
+        } else if (speedStage === 2) {
+          speedPrevZ = speederMesh.position.z;
+          speederMesh.position.z -= 34 * dt;
+          if (
+            collides(
+              player.position.x,
+              speederMesh.position.x,
+              speedPrevZ,
+              speederMesh.position.z,
+            )
+          ) {
+            hit();
+            spawnWreck(speederMesh.position.x, speederMesh.position.z);
+            speedStage = 0;
+            speederMesh.visible = false;
+            nextSpeedAt = state.elapsed + 40 + random() * 30;
+            state.flash = '과속 차량 추돌 · 폭발!';
+            flashTime = 1.2;
+          }
+          if (speedPrevZ > 2 && speederMesh.position.z <= 2) {
+            shake = Math.max(shake, 0.35);
+            beep(150, 0.35);
+          }
+          if (speederMesh.position.z < -78) {
+            speedStage = 0;
+            speederMesh.visible = false;
+            nextSpeedAt = state.elapsed + 40 + random() * 30;
+          }
+        }
+        // Wrong-way car: rushes at the player, then head-on crashes into the car ahead in its lane.
+        if (!wrongActive && state.elapsed >= nextWrongAt) {
+          let vi = -1,
+            vz = -1e9;
+          cars.forEach((c, i) => {
+            if (
+              c.mesh.visible &&
+              !c.hit &&
+              c.mesh.position.z < -15 &&
+              c.mesh.position.z > vz
+            ) {
+              vz = c.mesh.position.z;
+              vi = i;
+            }
+          });
+          if (vi < 0) nextWrongAt = state.elapsed + 10;
+          else {
+            wrongActive = true;
+            wrongT = 0;
+            wrongVictim = vi;
+            wrongwayMesh.position.set(cars[vi].mesh.position.x, 0, -78);
+            wrongPrevZ = -78;
+            wrongwayMesh.visible = true;
+            state.flash = '역주행 차량 발생!';
+            flashTime = 2;
+            beep(300, 0.5);
+          }
+        } else if (wrongActive) {
+          wrongT += dt;
+          wrongPrevZ = wrongwayMesh.position.z;
+          wrongwayMesh.position.z += (state.speed + 16) * dt;
+          const vc = cars[wrongVictim];
+          if (
+            collides(
+              player.position.x,
+              wrongwayMesh.position.x,
+              wrongPrevZ,
+              wrongwayMesh.position.z,
+            )
+          ) {
+            hit();
+            spawnWreck(wrongwayMesh.position.x, wrongwayMesh.position.z);
             wrongActive = false;
-            nextWrongAt = state.elapsed + 55;
+            wrongwayMesh.visible = false;
+            nextWrongAt = state.elapsed + 50 + random() * 40;
+            state.flash = '역주행 차량 추돌 · 폭발!';
+            flashTime = 1.4;
+          }
+          if (
+            wrongActive &&
+            vc &&
+            vc.mesh.visible &&
+            wrongwayMesh.position.z >= vc.mesh.position.z - 2.5
+          ) {
+            vc.hit = true;
+            vc.mesh.visible = false;
+            spawnWreck(vc.mesh.position.x, vc.mesh.position.z);
+            spawnWreck(wrongwayMesh.position.x, wrongwayMesh.position.z);
+            wrongActive = false;
+            wrongwayMesh.visible = false;
+            state.flash = '역주행 차량 정면충돌!';
+            flashTime = 2;
+            shake = 0.8;
+            beep(90, 0.6);
+            nextWrongAt = state.elapsed + 50 + random() * 40;
+          } else if (wrongT > 7 || wrongwayMesh.position.z > 12) {
+            wrongActive = false;
+            wrongwayMesh.visible = false;
+            if (wrongT > 7) {
+              spawnWreck(
+                wrongwayMesh.position.x,
+                Math.min(wrongwayMesh.position.z, 10),
+              );
+              state.flash = '역주행 차량 단독사고!';
+              flashTime = 1.6;
+              shake = 0.5;
+            }
+            nextWrongAt = state.elapsed + 50 + random() * 40;
+          }
+        }
+        for (const event of [
+          {
+            mesh: speederMesh,
+            previous: speedPrevZ,
+            active: speedStage === 2,
+            stop: () => {
+              speedStage = 0;
+              nextSpeedAt = state.elapsed + 45;
+            },
           },
-        },
-      ]) {
-        if (!event.active || !event.mesh.visible) continue;
-        const victim = cars.find(
-          (c) =>
-            c.mesh.visible &&
-            !c.hit &&
-            Math.abs(c.mesh.position.x - event.mesh.position.x) < 2.2 &&
-            Math.min(
-              event.previous - c.previousZ,
-              event.mesh.position.z - c.mesh.position.z,
-            ) <= 3 &&
-            Math.max(
-              event.previous - c.previousZ,
-              event.mesh.position.z - c.mesh.position.z,
-            ) >= -3,
-        );
-        if (victim) {
-          victim.hit = true;
-          victim.mesh.visible = false;
-          event.mesh.visible = false;
-          event.stop();
-          spawnWreck(victim.mesh.position.x, victim.mesh.position.z);
-          state.flash = '차량 연쇄 추돌! 폭발 반경을 피해!';
-          flashTime = 2;
+          {
+            mesh: drunkMesh,
+            previous: drunkPrevZ,
+            active: drunkActive,
+            stop: () => {
+              drunkActive = false;
+              nextDrunkAt = state.elapsed + 45;
+            },
+          },
+          {
+            mesh: wrongwayMesh,
+            previous: wrongPrevZ,
+            active: wrongActive,
+            stop: () => {
+              wrongActive = false;
+              nextWrongAt = state.elapsed + 55;
+            },
+          },
+        ]) {
+          if (!event.active || !event.mesh.visible) continue;
+          const victim = cars.find(
+            (c) =>
+              c.mesh.visible &&
+              !c.hit &&
+              Math.abs(c.mesh.position.x - event.mesh.position.x) < 2.2 &&
+              Math.min(
+                event.previous - c.previousZ,
+                event.mesh.position.z - c.mesh.position.z,
+              ) <= 3 &&
+              Math.max(
+                event.previous - c.previousZ,
+                event.mesh.position.z - c.mesh.position.z,
+              ) >= -3,
+          );
+          if (victim) {
+            victim.hit = true;
+            victim.mesh.visible = false;
+            event.mesh.visible = false;
+            event.stop();
+            spawnWreck(victim.mesh.position.x, victim.mesh.position.z);
+            state.flash = '차량 연쇄 추돌! 폭발 반경을 피해!';
+            flashTime = 2;
+          }
         }
-      }
-      // Crash wrecks: static obstacles with blinking beacons.
-      for (const w of wrecks) {
-        if (!w.active) continue;
-        w.t += dt;
-        w.previousZ = w.mesh.position.z;
-        w.mesh.position.z += state.speed * dt;
-        w.beacon.visible = Math.floor(clock * 7) % 2 === 0;
+        // Crash wrecks: static obstacles with blinking beacons.
+        for (const w of wrecks) {
+          if (!w.active) continue;
+          w.t += dt;
+          w.previousZ = w.mesh.position.z;
+          w.mesh.position.z += state.speed * dt;
+          w.beacon.visible = Math.floor(clock * 7) % 2 === 0;
+          if (
+            !w.consumed &&
+            collides(
+              player.position.x,
+              w.mesh.position.x,
+              w.previousZ,
+              w.mesh.position.z,
+            )
+          ) {
+            w.consumed = true;
+            hit();
+            state.flash = '사고 잔해를 들이받았다!';
+            flashTime = 1.2;
+          }
+          if (w.t > 14 || w.mesh.position.z > 26) {
+            w.active = false;
+            w.mesh.visible = false;
+          }
+        }
+        if (taserActive) {
+          taserPreviousZ = taser.position.z;
+          taser.position.z += (state.speed + 28) * dt;
+          // The shooter is a static roadblock: scroll with the world and stand
+          // facing the player (+Z) in an aiming pose instead of running in place.
+          taserPolice.position.z += state.speed * dt;
+          taserPolice.position.x = taserLane * 3.65;
+          taserPolice.rotation.set(0, Math.PI, 0);
+          animateRunner(taserPolice, clock, 0.1);
+          (taserPolice.userData.rightArm as THREE.Group).rotation.x = -1.45;
+          if (
+            !jumpClearsTaser(jumpHeight) &&
+            collides(
+              player.position.x,
+              taser.position.x,
+              taserPreviousZ,
+              taser.position.z,
+            )
+          ) {
+            taserActive = false;
+            taser.visible = false;
+            taserPolice.visible = false;
+            state.flash = '테이저 적중!';
+            flashTime = 1.2;
+            hit();
+          } else if (taser.position.z > 10) {
+            taserActive = false;
+            taser.visible = false;
+            taserPolice.visible = false;
+            state.flash = '테이저 회피!';
+            flashTime = 1.2;
+          }
+        }
         if (
-          !w.consumed &&
-          collides(
-            player.position.x,
-            w.mesh.position.x,
-            w.previousZ,
-            w.mesh.position.z,
-          )
+          empTime <= 0 &&
+          shouldActivateMartialLaw(state.elapsed, state.hits) &&
+          !helicopterActive
         ) {
-          w.consumed = true;
-          hit();
-          state.flash = '사고 잔해를 들이받았다!';
-          flashTime = 1.2;
+          helicopterActive = true;
+          helicopter.position.set(
+            (Math.floor(random() * 3) - 1) * 3.65,
+            2.15,
+            -70,
+          );
+          helicopterPreviousZ = helicopter.position.z;
+          helicopter.visible = true;
+          beep(180, 0.7);
         }
-        if (w.t > 14 || w.mesh.position.z > 26) {
-          w.active = false;
-          w.mesh.visible = false;
-        }
-      }
-      if (taserActive) {
-        taserPreviousZ = taser.position.z;
-        taser.position.z += (state.speed + 28) * dt;
-        // The shooter is a static roadblock: scroll with the world and stand
-        // facing the player (+Z) in an aiming pose instead of running in place.
-        taserPolice.position.z += state.speed * dt;
-        taserPolice.position.x = taserLane * 3.65;
-        taserPolice.rotation.set(0, Math.PI, 0);
-        animateRunner(taserPolice, clock, 0.1);
-        (taserPolice.userData.rightArm as THREE.Group).rotation.x = -1.45;
-        if (
-          !jumpClearsTaser(jumpHeight) &&
-          collides(
-            player.position.x,
-            taser.position.x,
-            taserPreviousZ,
-            taser.position.z,
+        if (helicopterActive) {
+          helicopterPreviousZ = helicopter.position.z;
+          helicopter.position.z += (state.speed + 15) * dt;
+          helicopter.rotation.y = Math.sin(clock * 1.8) * 0.12;
+          rotor.rotation.y += dt * 13;
+          tailRotor.rotation.z += dt * 11;
+          if (
+            collides(
+              player.position.x,
+              helicopter.position.x,
+              helicopterPreviousZ,
+              helicopter.position.z,
+            ) &&
+            jumpHeight < 1.15
           )
-        ) {
-          taserActive = false;
-          taser.visible = false;
-          taserPolice.visible = false;
-          state.flash = '테이저 적중!';
-          flashTime = 1.2;
-          hit();
-        } else if (taser.position.z > 10) {
-          taserActive = false;
-          taser.visible = false;
-          taserPolice.visible = false;
-          state.flash = '테이저 회피!';
-          flashTime = 1.2;
+            helicopterHit();
+          if (helicopter.position.z > 15) {
+            helicopter.position.z = -70;
+            helicopterPreviousZ = -70;
+            helicopter.position.x = (Math.floor(random() * 3) - 1) * 3.65;
+          }
         }
-      }
-      if (
-        empTime <= 0 &&
-        shouldActivateMartialLaw(state.elapsed, state.hits) &&
-        !helicopterActive
-      ) {
-        helicopterActive = true;
-        helicopter.position.set(
-          (Math.floor(random() * 3) - 1) * 3.65,
-          2.15,
-          -70,
+        ambulance.position.z = mix(
+          ambulance.position.z,
+          AMBULANCE_GAPS[state.hits],
+          1 - Math.exp(-dt * 1.8),
         );
-        helicopterPreviousZ = helicopter.position.z;
-        helicopter.visible = true;
-        beep(180, 0.7);
-      }
-      if (helicopterActive) {
-        helicopterPreviousZ = helicopter.position.z;
-        helicopter.position.z += (state.speed + 15) * dt;
-        helicopter.rotation.y = Math.sin(clock * 1.8) * 0.12;
-        rotor.rotation.y += dt * 13;
-        tailRotor.rotation.z += dt * 11;
-        if (
-          collides(
-            player.position.x,
-            helicopter.position.x,
-            helicopterPreviousZ,
-            helicopter.position.z,
-          ) &&
-          jumpHeight < 1.15
-        )
-          helicopterHit();
-        if (helicopter.position.z > 15) {
-          helicopter.position.z = -70;
-          helicopterPreviousZ = -70;
-          helicopter.position.x = (Math.floor(random() * 3) - 1) * 3.65;
-        }
-      }
-      ambulance.position.z = mix(
-        ambulance.position.z,
-        AMBULANCE_GAPS[state.hits],
-        1 - Math.exp(-dt * 1.8),
-      );
-      ambulance.position.x = mix(
-        ambulance.position.x,
-        player.position.x > 1 ? -3.4 : 3.4,
-        dt * 1.3,
-      );
-      state.ambulance = ambulance.position.z;
-      cops.forEach((c, i) => {
-        c.visible = i < state.police;
-        c.rotation.set(0, 0, 0);
-        c.position.x = mix(
-          c.position.x,
-          clamp(player.position.x + (i % 2 === 0 ? -2 : 2), -5, 5),
-          dt * 3,
+        ambulance.position.x = mix(
+          ambulance.position.x,
+          player.position.x > 1 ? -3.4 : 3.4,
+          dt * 1.3,
         );
-        c.position.z = 2.8 + Math.floor(i / 2) * 1.9;
-        animateRunner(c, clock + i * 0.18, 1);
-      });
+        state.ambulance = ambulance.position.z;
+        cops.forEach((c, i) => {
+          c.visible = i < state.police;
+          c.rotation.set(0, 0, 0);
+          c.position.x = mix(
+            c.position.x,
+            clamp(player.position.x + (i % 2 === 0 ? -2 : 2), -5, 5),
+            dt * 3,
+          );
+          c.position.z = 2.8 + Math.floor(i / 2) * 1.9;
+          animateRunner(c, clock + i * 0.18, 1);
+        });
+      }
       targetCamera.set(
         player.position.x * 0.18 + curveDir * 5.5 * ck,
         7 - 1.2 * ck,
@@ -2378,6 +2612,12 @@ export function createGame(
   const observer = new ResizeObserver(resize);
   observer.observe(host);
   resize();
+  function skipEnding() {
+    if (!state.cleared || !endingSequence) return;
+    endingTime = endingTime < 8 ? 8 : ENDING_DURATION;
+    state.ending = endingSequence.update(endingTime, camera.aspect);
+    emit();
+  }
   function keydown(e: KeyboardEvent) {
     if (e.defaultPrevented || document.querySelector('dialog[open]')) return;
     if (
@@ -2404,6 +2644,14 @@ export function createGame(
     )
       e.preventDefault();
     if (e.repeat) return;
+    if (
+      state.cleared &&
+      state.ending !== 'done' &&
+      (e.key === 'Enter' || e.key === ' ')
+    ) {
+      skipEnding();
+      return;
+    }
     if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') move(-1);
     if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') move(1);
     if (e.key === 'ArrowUp' || e.key.toLowerCase() === 'w' || e.key === ' ')
@@ -2416,6 +2664,7 @@ export function createGame(
     if (e.key === 'Escape') pause();
     if (e.key === 'Shift') boost();
     if (e.key.toLowerCase() === 'e') useItem();
+    if (e.key.toLowerCase() === 'f') attackBoss();
   }
   const blur = () => {
     if (state.phase === 'running') pause();
@@ -2442,6 +2691,9 @@ export function createGame(
   raf = requestAnimationFrame(animate);
   return {
     start,
+    skipEnding,
+    continueEndless,
+    attack: () => attackBoss(),
     pause,
     move,
     jump,
@@ -2472,6 +2724,9 @@ export function createGame(
       cancelAnimationFrame(raf);
       observer.disconnect();
       roadScenery.dispose();
+      endingSequence?.dispose();
+      bossEncounter.dispose();
+      worldVisual.dispose();
       window.removeEventListener('keydown', keydown);
       window.removeEventListener('blur', blur);
       host.removeEventListener('pointerdown', pointerdown);

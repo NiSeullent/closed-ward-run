@@ -4,7 +4,7 @@ async (page) => {
  await p1.goto('http://127.0.0.1:35174/tests/engine/multiplayer.html?user=1');
  const f=p1.frameLocator('#game');
  await f.getByRole('button',{name:'멀티플레이 열기',exact:true}).click();
- await f.getByRole('button',{name:'ZUKU 계정으로 연결',exact:true}).click();
+ await f.getByRole('button',{name:'2인 방 만들기',exact:true}).waitFor();
  await f.getByRole('button',{name:'2인 방 만들기',exact:true}).click();
  await f.locator('output').waitFor();
  const code=(await f.locator('output').innerText()).replace('초대 코드 ','');
@@ -12,7 +12,7 @@ async (page) => {
  await p2.goto('http://127.0.0.1:35174/tests/engine/multiplayer.html?user=2');
  const g=p2.frameLocator('#game');
  await g.getByRole('button',{name:'멀티플레이 열기',exact:true}).click();
- await g.getByRole('button',{name:'ZUKU 계정으로 연결',exact:true}).click();
+ await g.getByRole('button',{name:'2인 방 만들기',exact:true}).waitFor();
  await g.getByRole('textbox',{name:'초대 코드',exact:true}).fill(code);
  await g.getByRole('button',{name:'참가',exact:true}).click();await g.locator('output').waitFor();
  await f.getByRole('button',{name:'함께 출발',exact:true}).click();

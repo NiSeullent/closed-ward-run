@@ -2,6 +2,8 @@
 
 Every operation is `POST /api/v1/cloud/runtime/{contentId}/{action}` with an authenticated account. In JUMP, use the SDK's `GameCloud.call(action, payload)`: the host verifies iframe source, opaque origin and session nonce, binds the URL to its content, and keeps the token out of the game. Direct networking remains denied by the sandbox CSP.
 
+At mount, `GameCloud.connect()` reuses site login and the server's account/project consent. First consent is rendered by the trusted site and covers player ID/name, rankings, saves and rooms. Silent `connect({interactive:false})` never prompts. The site alone calls `connection-status` and `consent-grant {version:1,expectedPlayerId}`; neither action is forwarded from the iframe. All game data requires current consent. `consent-revoke` removes consent and active room membership, retaining existing saves/scores. The bridge supplies `expectedPlayerId` on every bound request, preventing account-switch writes. `watchGameCloudAuth` signals logout/account changes without sending credentials.
+
 | Action | Payload | Result |
 |---|---|---|
 | context | `{}` | projectId, player `{id,name}`, capabilities, scoreTrust |

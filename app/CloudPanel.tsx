@@ -5,6 +5,7 @@ import {
   Cloud,
   DEFAULT_PROJECT,
   parsePeer,
+  watchGameCloudAuth,
   type Score,
   type Peer,
   type Room,
@@ -43,39 +44,91 @@ export function CloudPanel({
     round = useRef<number | null>(null),
     saving = useRef(false);
   const onRaceStartRef = useRef(onRaceStart);
+  const connectionEpoch = useRef(0),
+    connecting = useRef(false);
+  const previousPhase = useRef(state.phase);
+  const runAccountInvalid = useRef(false);
   onRaceStartRef.current = onRaceStart;
   latest.current = state;
   const sandbox =
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).has('zwf-session');
   async function refresh(c: Cloud, more = false) {
-    const data = await c.scores(more ? (nextOffset ?? 0) : 0);
+    const epoch = connectionEpoch.current;
+    const data = await c.scores(
+      more ? (nextOffset ?? 0) : 0,
+      latest.current.mode,
+    );
+    if (epoch !== connectionEpoch.current) return;
     setRows((old) => (more ? [...old, ...data.rows] : data.rows));
     setNextOffset(data.nextOffset);
   }
-  async function connect() {
+  async function connect(interactive = true) {
+    if (connecting.current) return;
+    connecting.current = true;
+    const epoch = connectionEpoch.current;
     setBusy(true);
+    setStatus('ZUKU 계정 연결 확인 중…');
     try {
       if (!sandbox && (!content.trim() || !token.trim()))
         throw new Error('JUMP 게임 ID와 세션 토큰을 입력하세요.');
       const c = new Cloud(content, token.trim());
-      const ctx = await c.context();
-      identity.current = ctx.player;
+      const ctx = await c.context(interactive);
+      if (epoch !== connectionEpoch.current) return;
       await refresh(c);
-      const save = await c.load();
+      const save = await c.load(latest.current.mode);
+      if (epoch !== connectionEpoch.current) return;
+      identity.current = ctx.player;
       setCloud(c);
       setToken('');
       setStatus(
         `${ctx.player.name} · Cloud 연결됨${save.data?.best ? ` · 최고 ${save.data.best}m` : ''}`,
       );
     } catch (e) {
-      setStatus((e as Error).message);
+      if (epoch === connectionEpoch.current) setStatus((e as Error).message);
     } finally {
-      setBusy(false);
+      if (epoch === connectionEpoch.current) {
+        connecting.current = false;
+        setBusy(false);
+      }
     }
   }
+  function clearConnection() {
+    connectionEpoch.current++;
+    connecting.current = false;
+    saving.current = false;
+    saved.current = true; // A previous account's run must not be saved as the next account.
+    runAccountInvalid.current = true;
+    identity.current = { id: '', name: '' };
+    setCloud(null);
+    setRoom(null);
+    setPeer(null);
+    setRows([]);
+    setNextOffset(null);
+    setCode('');
+    setRoomStatus('');
+    setCountdown('');
+    setBusy(false);
+    started.current = false;
+    round.current = null;
+    game.current?.setRival(null);
+  }
+  useEffect(() => {
+    if (!sandbox) return;
+    void connect();
+    const unsubscribe = watchGameCloudAuth(() => {
+      clearConnection();
+      void connect(false);
+    });
+    return () => {
+      unsubscribe();
+      connectionEpoch.current++;
+      connecting.current = false;
+    };
+  }, [sandbox]);
   async function join(host: boolean) {
     if (!cloud) return;
+    const epoch = connectionEpoch.current;
     setBusy(true);
     try {
       if (room) await cloud.call('room-leave', { roomId: room.roomId });
@@ -83,6 +136,7 @@ export function CloudPanel({
         host ? 'room-create' : 'room-join',
         host ? { capacity: 2 } : { roomId: code.trim() },
       );
+      if (epoch !== connectionEpoch.current) return;
       seq.current =
         r.members?.find((m) => m.id === identity.current.id)?.seq ?? 0;
       started.current = false;
@@ -91,14 +145,16 @@ export function CloudPanel({
       setCode(r.roomId);
       setRoomStatus('방장이 시작하면 3초 후 함께 출발합니다.');
     } catch (e) {
+      if (epoch !== connectionEpoch.current) return;
       setRoom(null);
       setStatus((e as Error).message);
     } finally {
-      setBusy(false);
+      if (epoch === connectionEpoch.current) setBusy(false);
     }
   }
   useEffect(() => {
     if (!cloud || !room) return;
+    const epoch = connectionEpoch.current;
     let cancelled = false,
       timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -114,16 +170,22 @@ export function CloudPanel({
             updated: Date.now(),
             elapsed: s.elapsed,
             cleared: s.cleared,
+            mode: s.mode,
             round: round.current,
           },
         });
-        if (cancelled) return;
+        if (cancelled || epoch !== connectionEpoch.current) return;
         const other = r.members.find(
           (m) =>
             m.id !== identity.current.id && r.serverTime - m.seenAt < 10000,
         );
         const remote = parsePeer(other?.state);
-        const p = remote && remote.round === round.current ? remote : null;
+        const p =
+          remote &&
+          remote.round === round.current &&
+          (remote.mode ?? 'story') === s.mode
+            ? remote
+            : null;
         setPeer(p);
         game.current?.setRival(p);
         if (r.startsAt && !started.current) {
@@ -142,13 +204,14 @@ export function CloudPanel({
           p ? '상대 연결됨 · 2인 레이스' : '상대 대기 중 / 연결 끊김',
         );
       } catch (e) {
-        if (!cancelled) {
+        if (!cancelled && epoch === connectionEpoch.current) {
           setPeer(null);
           game.current?.setRival(null);
           setRoomStatus((e as Error).message);
         }
       } finally {
-        if (!cancelled) timer = setTimeout(poll, 500);
+        if (!cancelled && epoch === connectionEpoch.current)
+          timer = setTimeout(poll, 500);
       }
     };
     void poll();
@@ -177,39 +240,65 @@ export function CloudPanel({
     }
   }
   async function saveResult() {
-    if (!cloud || saving.current) return;
+    if (!cloud || saving.current || runAccountInvalid.current) return;
+    const epoch = connectionEpoch.current;
     saving.current = true;
     setBusy(true);
     try {
       const s = latest.current;
-      await cloud.submit({
-        ...identity.current,
-        distance: Math.floor(s.distance),
-        stage: s.stage,
-      });
-      await cloud.save({
-        best: Math.floor(s.best),
-        stage: s.stage,
-        cleared: s.cleared,
-        version: 2,
-      });
+      await cloud.submit(
+        {
+          ...identity.current,
+          distance: Math.floor(s.distance),
+          stage: s.stage,
+        },
+        s.mode,
+      );
+      if (epoch !== connectionEpoch.current) return;
+      const previousSave = await cloud.load(s.mode);
+      if (epoch !== connectionEpoch.current) return;
+      const previousBest = Number(previousSave.data?.best);
+      await cloud.save(
+        {
+          best: Math.floor(Math.max(s.best, Number.isFinite(previousBest) ? previousBest : 0)),
+          stage: s.stage,
+          cleared: s.cleared,
+          version: 4,
+        },
+        s.mode,
+      );
+      if (epoch !== connectionEpoch.current) return;
       await refresh(cloud);
+      if (epoch !== connectionEpoch.current) return;
       setStatus('클라우드 기록 저장 완료');
     } catch (e) {
+      if (epoch !== connectionEpoch.current) return;
       saved.current = false;
       setStatus(`저장 실패 · 재시도 가능: ${(e as Error).message}`);
     } finally {
-      saving.current = false;
-      setBusy(false);
+      if (epoch === connectionEpoch.current) {
+        saving.current = false;
+        setBusy(false);
+      }
     }
   }
   useEffect(() => {
-    if (state.phase === 'running') saved.current = false;
+    if (
+      state.phase === 'running' &&
+      !['running', 'paused'].includes(previousPhase.current)
+    ) {
+      saved.current = false;
+      runAccountInvalid.current = false;
+    }
+    previousPhase.current = state.phase;
     if (state.phase === 'over' && cloud && !saved.current) {
       saved.current = true;
       void saveResult();
     }
   }, [state.phase, cloud]);
+  useEffect(() => {
+    if (cloud) void refresh(cloud).catch((e) => setStatus(e.message));
+  }, [state.mode]);
   const outcome = started.current ? raceOutcome(state, peer) : null;
   return (
     <>
@@ -395,7 +484,11 @@ export function CloudPanel({
                     </button>
                   )}
                   <button
-                    disabled={busy || state.phase !== 'over'}
+                    disabled={
+                      busy ||
+                      state.phase !== 'over' ||
+                      runAccountInvalid.current
+                    }
                     onClick={() => void saveResult()}
                   >
                     기록 저장 / 재시도
@@ -407,14 +500,23 @@ export function CloudPanel({
               )}
               <button
                 className="text-button"
-                disabled={!!room}
-                onClick={() => {
-                  setCloud(null);
-                  setRows([]);
-                  setStatus('연결 해제됨');
+                disabled={busy || !!room}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    await cloud.call('consent-revoke');
+                    clearConnection();
+                    setStatus(
+                      '자동 연결을 해제했습니다. 다시 연결할 때 동의가 필요합니다.',
+                    );
+                  } catch (e) {
+                    setStatus((e as Error).message);
+                  } finally {
+                    setBusy(false);
+                  }
                 }}
               >
-                연결 해제
+                자동 연결 해제
               </button>
             </>
           )}
